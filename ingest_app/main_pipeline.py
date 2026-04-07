@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import psycopg
 
-from ingest_app.config import AppConfig
-from ingest_app.db import create_table, get_existing_hashes, insert_payload
-from ingest_app.file_utils import compute_sha256, iter_files
-from ingest_app.payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
-
+try:
+    from ingest_app.config import AppConfig
+    from ingest_app.db import create_table, get_existing_hashes, insert_payload
+    from ingest_app.file_utils import compute_sha256, iter_files
+    from ingest_app.payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
+except ModuleNotFoundError:
+    from config import AppConfig
+    from db import create_table, get_existing_hashes, insert_payload
+    from file_utils import compute_sha256, iter_files
+    from payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
 
 def build_payload(file_path: Path, cfg: AppConfig) -> dict:
     file_hash = compute_sha256(file_path)

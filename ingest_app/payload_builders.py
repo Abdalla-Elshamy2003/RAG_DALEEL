@@ -7,11 +7,18 @@ from typing import Any
 import fitz
 from docx import Document
 
-from ingest_app.file_utils import chunk_list
-from ingest_app.text_utils import clean_text, detect_lang, token_count_simple
+try:
+    from ingest_app.file_utils import chunk_list
+    from ingest_app.text_utils import detect_lang, token_count_simple
+except ModuleNotFoundError:
+    from file_utils import chunk_list
+    from text_utils import detect_lang, token_count_simple
+
+def build_asset_prefix(file_hash: str) -> str:
+    return f"file_{file_hash[:12]}"
 
 
-def extract_pdf_assets(page: fitz.Page, doc_id: str) -> list[dict[str, Any]]:
+def extract_pdf_assets(page: fitz.Page, asset_prefix: str) -> list[dict[str, Any]]:
     data = page.get_text("dict")
     blocks = data.get("blocks", [])
     assets = []
@@ -21,7 +28,7 @@ def extract_pdf_assets(page: fitz.Page, doc_id: str) -> list[dict[str, Any]]:
         if block.get("type") == 1 and block.get("image"):
             bbox = block.get("bbox") or []
             assets.append({
-                "asset_id": f"{doc_id}_p{page.number + 1}_a{asset_no}",
+                "asset_id": f"{asset_prefix}_p{page.number + 1}_a{asset_no}",
                 "asset_type": "image",
                 "image_type": "embedded_image",
                 "bbox": {
@@ -45,61 +52,38 @@ def extract_pdf_assets(page: fitz.Page, doc_id: str) -> list[dict[str, Any]]:
 
 def build_pdf_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
     with fitz.open(file_path) as doc:
-        meta = dict(doc.metadata or {})
-        doc_id = f"doc_{file_hash[:12]}"
+        asset_prefix = build_asset_prefix(file_hash)
         pages = []
         all_text = []
 
-        for idx, page in enumerate(doc, start=1):
-            native_raw = page.get_text("text", sort=True) or ""
-            native_clean = clean_text(native_raw)
-
-            extraction_method = "text"
-            final_raw = native_raw
-            final_clean = native_clean
-            ocr_conf = None
-
-            if not final_clean:
-                extraction_method = "empty"
-
-            all_text.append(final_clean)
-            assets = extract_pdf_assets(page, doc_id)
+        for page in doc:
+            text_raw = page.get_text("text", sort=True) or ""
+            all_text.append(text_raw)
+            assets = extract_pdf_assets(page, asset_prefix)
 
             pages.append({
-                "page_no": idx,
-                "extraction_method": extraction_method,
-                "text_raw": final_raw,
-                "text_clean": final_clean,
-                "language": detect_lang(final_clean),
-                "char_count": len(final_clean),
-                "token_count": token_count_simple(final_clean),
+                "text_raw": text_raw,
+                "language": detect_lang(text_raw),
+                "char_count": len(text_raw),
+                "token_count": token_count_simple(text_raw),
                 "page_metadata": {
                     "has_tables": False,
                     "has_images": len(assets) > 0,
                     "has_footnotes": False
                 },
                 "assets": assets,
-                "ocr_confidence": ocr_conf
+                "ocr_confidence": None
             })
 
         combined_text = "\n\n".join(t for t in all_text if t)
 
         return {
-            "doc_id": doc_id,
             "file_name": file_path.name,
             "file_path": str(file_path).replace("\\", "/"),
             "file_size_bytes": file_path.stat().st_size,
             "file_hash": file_hash,
             "language": detect_lang(combined_text),
-            "page_count": len(doc),
-            "extraction_status": "completed",
             "source_type": "pdf",
-            "metadata": {
-                "title": meta.get("title"),
-                "author": meta.get("author"),
-                "created_at_source": meta.get("creationDate"),
-                "keywords": []
-            },
             "pages": pages
         }
 
@@ -114,8 +98,7 @@ def extract_docx_media_count(file_path: Path) -> int:
 
 def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs: int = 20) -> dict[str, Any]:
     doc = Document(file_path)
-    props = doc.core_properties
-    doc_id = f"doc_{file_hash[:12]}"
+    asset_prefix = build_asset_prefix(file_hash)
 
     paragraphs = []
     for p in doc.paragraphs:
@@ -128,7 +111,7 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
     for table in doc.tables:
         rows = []
         for row in table.rows:
-            cells = [clean_text(cell.text or "") for cell in row.cells]
+            cells = [(cell.text or "").strip() for cell in row.cells]
             rows.append(" | ".join(cell for cell in cells if cell))
         table_text = "\n".join(r for r in rows if r)
         if table_text.strip():
@@ -142,14 +125,13 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
 
     for idx, para_group in enumerate(logical_pages_raw, start=1):
         text_raw = "\n".join(para_group).strip()
-        text_clean = clean_text(text_raw)
-        all_text.append(text_clean)
+        all_text.append(text_raw)
 
         assets = []
         if idx == 1 and media_count > 0:
             for a in range(1, media_count + 1):
                 assets.append({
-                    "asset_id": f"{doc_id}_p{idx}_a{a}",
+                    "asset_id": f"{asset_prefix}_p{idx}_a{a}",
                     "asset_type": "image",
                     "image_type": "embedded_image",
                     "bbox": None,
@@ -164,13 +146,10 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
                 })
 
         pages.append({
-            "page_no": idx,
-            "extraction_method": "logical_docx_page",
             "text_raw": text_raw,
-            "text_clean": text_clean,
-            "language": detect_lang(text_clean),
-            "char_count": len(text_clean),
-            "token_count": token_count_simple(text_clean),
+            "language": detect_lang(text_raw),
+            "char_count": len(text_raw),
+            "token_count": token_count_simple(text_raw),
             "page_metadata": {
                 "has_tables": has_tables if idx == 1 else False,
                 "has_images": len(assets) > 0,
@@ -179,18 +158,13 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
             "assets": assets
         })
 
-    start_page_no = len(pages) + 1
-    for offset, table_text in enumerate(table_texts, start=0):
-        text_clean = clean_text(table_text)
-        all_text.append(text_clean)
+    for table_text in table_texts:
+        all_text.append(table_text)
         pages.append({
-            "page_no": start_page_no + offset,
-            "extraction_method": "table_from_docx",
             "text_raw": table_text,
-            "text_clean": text_clean,
-            "language": detect_lang(text_clean),
-            "char_count": len(text_clean),
-            "token_count": token_count_simple(text_clean),
+            "language": detect_lang(table_text),
+            "char_count": len(table_text),
+            "token_count": token_count_simple(table_text),
             "page_metadata": {
                 "has_tables": True,
                 "has_images": False,
@@ -202,55 +176,32 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
     combined_text = "\n\n".join(t for t in all_text if t)
 
     return {
-        "doc_id": doc_id,
         "file_name": file_path.name,
         "file_path": str(file_path).replace("\\", "/"),
         "file_size_bytes": file_path.stat().st_size,
         "file_hash": file_hash,
         "language": detect_lang(combined_text),
-        "page_count": len(pages),
-        "extraction_status": "completed",
         "source_type": "docx",
-        "metadata": {
-            "title": getattr(props, "title", None),
-            "author": getattr(props, "author", None),
-            "created_at_source": str(getattr(props, "created", None)) if getattr(props, "created", None) else None,
-            "keywords": []
-        },
         "pages": pages
     }
 
 
 def build_txt_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
     raw = file_path.read_text(encoding="utf-8", errors="ignore")
-    clean = clean_text(raw)
-    doc_id = f"doc_{file_hash[:12]}"
 
     return {
-        "doc_id": doc_id,
         "file_name": file_path.name,
         "file_path": str(file_path).replace("\\", "/"),
         "file_size_bytes": file_path.stat().st_size,
         "file_hash": file_hash,
-        "language": detect_lang(clean),
-        "page_count": 1,
-        "extraction_status": "completed",
+        "language": detect_lang(raw),
         "source_type": "txt",
-        "metadata": {
-            "title": file_path.stem,
-            "author": None,
-            "created_at_source": None,
-            "keywords": []
-        },
         "pages": [
             {
-                "page_no": 1,
-                "extraction_method": "text",
                 "text_raw": raw,
-                "text_clean": clean,
-                "language": detect_lang(clean),
-                "char_count": len(clean),
-                "token_count": token_count_simple(clean),
+                "language": detect_lang(raw),
+                "char_count": len(raw),
+                "token_count": token_count_simple(raw),
                 "page_metadata": {
                     "has_tables": False,
                     "has_images": False,
