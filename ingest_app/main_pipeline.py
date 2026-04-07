@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import psycopg
@@ -24,15 +25,17 @@ def build_payload(file_path: Path, cfg: AppConfig) -> dict:
     raise ValueError(f"Unsupported file type: {file_path}")
 
 
-def run_ingestion(root_folder: str = "./data", cfg: AppConfig | None = None) -> int:
+def run_ingestion(root_folder: str | None = None, cfg: AppConfig | None = None) -> int:
+    if root_folder is None:
+        root_folder = os.getenv("DATA_FOLDER", "./data")
     cfg = cfg or AppConfig()
     root = Path(root_folder)
     if not root.exists():
         print(f"Folder not found: {root}")
         return 1
 
-    files = list(iter_files(root))
-    print(f"Found {len(files)} supported files in {root}")
+    files = list(iter_files(root))[:5]  # Limit to first 5 files for testing
+    print(f"Found {len(files)} supported files in {root} (limited to 5 for testing)")
 
     total_files = len(files)
     skipped_files = 0
@@ -80,3 +83,9 @@ def run_ingestion(root_folder: str = "./data", cfg: AppConfig | None = None) -> 
     except Exception as exc:
         print(f"Fatal DB error: {exc}")
         return 2
+
+
+if __name__ == "__main__":
+    import sys
+    exit_code = run_ingestion()
+    sys.exit(exit_code)

@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: docs_ingestion_db
+    environment:
+      POSTGRES_DB: docs_ingestion
+      POSTGRES_USER: abdallah
+      POSTGRES_PASSWORD: 28102003
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ingestion_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U abdallah -d docs_ingestion"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: docs_ingestion_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_CONN: host=postgres port=5432 dbname=docs_ingestion user=abdallah password=28102003
+      DATA_FOLDER: /app/data
+    volumes:
+      - ./data:/app/data
+    networks:
+      - ingestion_network
+    command: ["python", "-m", "ingest_app.main_pipeline"]
+
+volumes:
+  postgres_data:
+
+networks:
+  ingestion_network:
+    driver: bridge
