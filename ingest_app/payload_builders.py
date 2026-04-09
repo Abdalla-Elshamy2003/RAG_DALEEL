@@ -9,10 +9,16 @@ from docx import Document
 
 try:
     from ingest_app.file_utils import chunk_list
-    from ingest_app.text_utils import detect_lang, token_count_simple
+    from ingest_app.text_utils import (
+        clean_text, detect_lang, token_count_simple,
+        build_structured_json, build_markdown_text
+    )
 except ModuleNotFoundError:
     from file_utils import chunk_list
-    from text_utils import detect_lang, token_count_simple
+    from text_utils import (
+        clean_text, detect_lang, token_count_simple,
+        build_structured_json, build_markdown_text
+    )
 
 def build_asset_prefix(file_hash: str) -> str:
     return f"file_{file_hash[:12]}"
@@ -58,6 +64,9 @@ def build_pdf_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
 
         for page in doc:
             text_raw = page.get_text("text", sort=True) or ""
+            text_raw = clean_text(text_raw)  # Clean and check for removal
+            if not text_raw:  # Skip pages with empty text after cleaning
+                continue
             all_text.append(text_raw)
             assets = extract_pdf_assets(page, asset_prefix)
 
@@ -76,15 +85,32 @@ def build_pdf_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
             })
 
         combined_text = "\n\n".join(t for t in all_text if t)
+        raw_cleaned_content = combined_text
+        structured_json = build_structured_json(file_hash, file_path.name, "pdf", raw_cleaned_content)
+        markdown_text = structured_json["markdown_text"]
 
         return {
+            "doc_id": file_hash,
             "file_name": file_path.name,
             "file_path": str(file_path).replace("\\", "/"),
-            "file_size_bytes": file_path.stat().st_size,
             "file_hash": file_hash,
-            "language": detect_lang(combined_text),
             "source_type": "pdf",
-            "pages": pages
+            "extraction_status": "success",
+            "language": structured_json.get("language", "unknown"),
+            "page_count": len(pages),
+            "raw_cleaned_content": raw_cleaned_content,
+            "structured_json": structured_json,
+            "markdown_text": markdown_text,
+            # Keep old payload for compatibility if needed
+            "legacy_payload": {
+                "file_name": file_path.name,
+                "file_path": str(file_path).replace("\\", "/"),
+                "file_size_bytes": file_path.stat().st_size,
+                "file_hash": file_hash,
+                "language": detect_lang(combined_text),
+                "source_type": "pdf",
+                "pages": pages
+            }
         }
 
 
@@ -114,6 +140,7 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
             cells = [(cell.text or "").strip() for cell in row.cells]
             rows.append(" | ".join(cell for cell in cells if cell))
         table_text = "\n".join(r for r in rows if r)
+        table_text = clean_text(table_text)  # Clean table text
         if table_text.strip():
             table_texts.append(table_text)
 
@@ -125,6 +152,9 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
 
     for idx, para_group in enumerate(logical_pages_raw, start=1):
         text_raw = "\n".join(para_group).strip()
+        text_raw = clean_text(text_raw)  # Clean and check for removal
+        if not text_raw:  # Skip pages with empty text after cleaning
+            continue
         all_text.append(text_raw)
 
         assets = []
@@ -159,6 +189,9 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
         })
 
     for table_text in table_texts:
+        table_text = clean_text(table_text)  # Ensure table text is cleaned
+        if not table_text:  # Skip if empty after cleaning
+            continue
         all_text.append(table_text)
         pages.append({
             "text_raw": table_text,
@@ -174,40 +207,97 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
         })
 
     combined_text = "\n\n".join(t for t in all_text if t)
+    raw_cleaned_content = combined_text
+    structured_json = build_structured_json(file_hash, file_path.name, "docx", raw_cleaned_content)
+    markdown_text = structured_json["markdown_text"]
 
     return {
+        "doc_id": file_hash,
         "file_name": file_path.name,
         "file_path": str(file_path).replace("\\", "/"),
-        "file_size_bytes": file_path.stat().st_size,
         "file_hash": file_hash,
-        "language": detect_lang(combined_text),
         "source_type": "docx",
-        "pages": pages
+        "extraction_status": "success",
+        "language": structured_json.get("language", "unknown"),
+        "page_count": len(pages),
+        "raw_cleaned_content": raw_cleaned_content,
+        "structured_json": structured_json,
+        "markdown_text": markdown_text,
+        # Keep old payload for compatibility
+        "legacy_payload": {
+            "file_name": file_path.name,
+            "file_path": str(file_path).replace("\\", "/"),
+            "file_size_bytes": file_path.stat().st_size,
+            "file_hash": file_hash,
+            "language": detect_lang(combined_text),
+            "source_type": "docx",
+            "pages": pages
+        }
     }
 
 
 def build_txt_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
     raw = file_path.read_text(encoding="utf-8", errors="ignore")
+    raw_cleaned_content = clean_text(raw)  # Clean the text
+    if not raw_cleaned_content:  # If text is empty after cleaning, return empty
+        return {
+            "doc_id": file_hash,
+            "file_name": file_path.name,
+            "file_path": str(file_path).replace("\\", "/"),
+            "file_hash": file_hash,
+            "source_type": "txt",
+            "extraction_status": "empty",
+            "language": "unknown",
+            "page_count": 0,
+            "raw_cleaned_content": "",
+            "structured_json": {},
+            "markdown_text": "",
+            "legacy_payload": {
+                "file_name": file_path.name,
+                "file_path": str(file_path).replace("\\", "/"),
+                "file_size_bytes": file_path.stat().st_size,
+                "file_hash": file_hash,
+                "language": "unknown",
+                "source_type": "txt",
+                "pages": []
+            }
+        }
+
+    structured_json = build_structured_json(file_hash, file_path.name, "txt", raw_cleaned_content)
+    markdown_text = structured_json["markdown_text"]
 
     return {
+        "doc_id": file_hash,
         "file_name": file_path.name,
         "file_path": str(file_path).replace("\\", "/"),
-        "file_size_bytes": file_path.stat().st_size,
         "file_hash": file_hash,
-        "language": detect_lang(raw),
         "source_type": "txt",
-        "pages": [
-            {
-                "text_raw": raw,
-                "language": detect_lang(raw),
-                "char_count": len(raw),
-                "token_count": token_count_simple(raw),
-                "page_metadata": {
-                    "has_tables": False,
-                    "has_images": False,
-                    "has_footnotes": False
-                },
-                "assets": []
-            }
-        ]
+        "extraction_status": "success",
+        "language": structured_json.get("language", "unknown"),
+        "page_count": 1,
+        "raw_cleaned_content": raw_cleaned_content,
+        "structured_json": structured_json,
+        "markdown_text": markdown_text,
+        "legacy_payload": {
+            "file_name": file_path.name,
+            "file_path": str(file_path).replace("\\", "/"),
+            "file_size_bytes": file_path.stat().st_size,
+            "file_hash": file_hash,
+            "language": detect_lang(raw_cleaned_content),
+            "source_type": "txt",
+            "pages": [
+                {
+                    "text_raw": raw_cleaned_content,
+                    "language": detect_lang(raw_cleaned_content),
+                    "char_count": len(raw_cleaned_content),
+                    "token_count": token_count_simple(raw_cleaned_content),
+                    "page_metadata": {
+                        "has_tables": False,
+                        "has_images": False,
+                        "has_footnotes": False
+                    },
+                    "assets": []
+                }
+            ]
+        }
     }

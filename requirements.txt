@@ -1,3 +1,5 @@
 psycopg[binary]
 PyMuPDF
 python-docx
+streamlit
+pandas
