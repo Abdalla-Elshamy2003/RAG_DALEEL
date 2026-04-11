@@ -67,6 +67,21 @@ def get_existing_hashes(conn: psycopg.Connection, hashes: list[str]) -> set[str]
         return {row[0] for row in cur.fetchall() if row and row[0]}
 
 
+def get_hash_by_filepath(conn: psycopg.Connection, file_paths: list[str]) -> dict[str, str]:
+    """
+    Returns {file_path: file_hash} for files already in DB.
+    Used to detect modified files (same path, new hash = file changed).
+    """
+    if not file_paths:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT file_path, file_hash FROM {MAIN_TABLE} WHERE file_path = ANY(%s)",
+            (file_paths,),
+        )
+        return {row[0]: row[1] for row in cur.fetchall() if row[0] and row[1]}
+
+
 # ─────────────────────────────────────────────
 # Insert helpers
 # ─────────────────────────────────────────────

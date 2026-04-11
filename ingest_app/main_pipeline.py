@@ -5,12 +5,12 @@ import psycopg
 
 try:
     from ingest_app.config import AppConfig
-    from ingest_app.db import create_table, get_existing_hashes, insert_payload
+    from ingest_app.db import create_tables, get_existing_hashes, insert_payload
     from ingest_app.file_utils import compute_sha256, iter_files
     from ingest_app.payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
 except ModuleNotFoundError:
     from config import AppConfig
-    from db import create_table, get_existing_hashes, insert_payload
+    from db import create_tables, get_existing_hashes, insert_payload
     from file_utils import compute_sha256, iter_files
     from payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
 
@@ -45,7 +45,7 @@ def run_ingestion(root_folder: str = "./data", cfg: AppConfig | None = None) -> 
 
     try:
         with psycopg.connect(cfg.db_conn) as conn:
-            create_table(conn)
+            create_tables(conn)
 
             file_hash_map: dict[Path, str] = {}
             for file_path in files:

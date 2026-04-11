@@ -654,9 +654,10 @@ with tab_reprocess:
         mc2.metric("⚠️ تم التخطي", sum(1 for r in results if r[0]=="skip"))
         mc3.metric("❌ فشل", sum(1 for r in results if r[0]=="fail"))
         
-        # Sync to post_processing_data
+        # Sync to post_processing_data (open fresh connection — previous one is closed)
         try:
-            sync_count = sync_post_processing_from_main(conn)
+            with psycopg.connect(cfg.db_conn) as sync_conn:
+                sync_count = sync_post_processing_from_main(sync_conn)
             st.info(f"🔄 تم مزامنة {sync_count} سجل إلى post_processing_data")
         except Exception as e:
             st.warning(f"تحذير في المزامنة: {e}")

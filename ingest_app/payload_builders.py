@@ -11,13 +11,13 @@ try:
     from ingest_app.file_utils import chunk_list
     from ingest_app.text_utils import (
         clean_text, detect_lang, token_count_simple,
-        build_structured_json, build_markdown_text
+        build_structured_json, build_markdown_text, extract_links
     )
 except ModuleNotFoundError:
     from file_utils import chunk_list
     from text_utils import (
         clean_text, detect_lang, token_count_simple,
-        build_structured_json, build_markdown_text
+        build_structured_json, build_markdown_text, extract_links
     )
 
 def build_asset_prefix(file_hash: str) -> str:
@@ -98,10 +98,11 @@ def build_pdf_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
             "extraction_status": "success",
             "language": structured_json.get("language", "unknown"),
             "page_count": len(pages),
+            "text_raw": raw_cleaned_content,
+            "links": extract_links(raw_cleaned_content),
             "raw_cleaned_content": raw_cleaned_content,
             "structured_json": structured_json,
             "markdown_text": markdown_text,
-            # Keep old payload for compatibility if needed
             "legacy_payload": {
                 "file_name": file_path.name,
                 "file_path": str(file_path).replace("\\", "/"),
@@ -220,6 +221,8 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
         "extraction_status": "success",
         "language": structured_json.get("language", "unknown"),
         "page_count": len(pages),
+        "text_raw": raw_cleaned_content,
+        "links": extract_links(raw_cleaned_content),
         "raw_cleaned_content": raw_cleaned_content,
         "structured_json": structured_json,
         "markdown_text": markdown_text,
@@ -239,7 +242,7 @@ def build_docx_payload(file_path: Path, file_hash: str, logical_page_paragraphs:
 def build_txt_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
     raw = file_path.read_text(encoding="utf-8", errors="ignore")
     raw_cleaned_content = clean_text(raw)  # Clean the text
-    if not raw_cleaned_content:  # If text is empty after cleaning, return empty
+    if not raw_cleaned_content:
         return {
             "doc_id": file_hash,
             "file_name": file_path.name,
@@ -249,6 +252,8 @@ def build_txt_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
             "extraction_status": "empty",
             "language": "unknown",
             "page_count": 0,
+            "text_raw": "",
+            "links": [],
             "raw_cleaned_content": "",
             "structured_json": {},
             "markdown_text": "",
@@ -275,6 +280,8 @@ def build_txt_payload(file_path: Path, file_hash: str) -> dict[str, Any]:
         "extraction_status": "success",
         "language": structured_json.get("language", "unknown"),
         "page_count": 1,
+        "text_raw": raw_cleaned_content,
+        "links": extract_links(raw_cleaned_content),
         "raw_cleaned_content": raw_cleaned_content,
         "structured_json": structured_json,
         "markdown_text": markdown_text,
