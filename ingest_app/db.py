@@ -122,7 +122,7 @@ def insert_post_processing_payload(conn: psycopg.Connection, payload: dict[str, 
 def sync_post_processing_from_main(conn: psycopg.Connection) -> int:
     """
     Copy all rows from preprocessing_data to post_processing_data.
-    Allows duplicates - every sync creates new copies.
+    Uses upsert semantics so repeated sync updates existing rows.
     """
     with conn.cursor() as cur:
         cur.execute(f"""
@@ -134,6 +134,16 @@ def sync_post_processing_from_main(conn: psycopg.Connection) -> int:
                 doc_id, file_name, file_path, file_ext, file_hash,
                 source_type, extraction_status, language, page_count, payload
             FROM {MAIN_TABLE};
+            ON CONFLICT (doc_id) DO UPDATE SET
+                file_name = EXCLUDED.file_name,
+                file_path = EXCLUDED.file_path,
+                file_ext = EXCLUDED.file_ext,
+                file_hash = EXCLUDED.file_hash,
+                source_type = EXCLUDED.source_type,
+                extraction_status = EXCLUDED.extraction_status,
+                language = EXCLUDED.language,
+                page_count = EXCLUDED.page_count,
+                payload = EXCLUDED.payload;
         """)
         copied = cur.rowcount
     conn.commit()
@@ -169,4 +179,159 @@ def get_recent_records(
             LIMIT %s
         """, (limit,))
         cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+# ─────────────────────────────────────────────
+# Chunking helpers
+# ─────────────────────────────────────────────
+def get_unprocessed_docs_for_chunking(
+    conn: psycopg.Connection,
+    limit: int = 100,
+    source_table: str = MAIN_TABLE
+) -> list[dict]:
+    """Get documents that haven't been chunked yet."""
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT d.doc_id, d.payload, d.source_type
+            FROM {source_table} d
+            WHERE NOT EXISTS (
+                SELECT 1 FROM chunks c
+                WHERE c.doc_id = d.doc_id
+            )
+            ORDER BY d.created_at DESC
+            LIMIT %s
+        """, (limit,))
+
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def save_chunks_to_db(conn: psycopg.Connection, chunks: list[dict]) -> int:
+    """Save chunks to database. Returns number of chunks saved."""
+    if not chunks:
+        return 0
+
+    inserted = 0
+    with conn.cursor() as cur:
+        for chunk in chunks:
+            cur.execute("""
+                INSERT INTO chunks (
+                    chunk_id, doc_id, chunk_index, chunk_text,
+                    char_count, token_count, embedding_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    chunk_text = EXCLUDED.chunk_text,
+                    char_count = EXCLUDED.char_count,
+                    token_count = EXCLUDED.token_count
+            """, (
+                chunk["chunk_id"],
+                chunk["doc_id"],
+                chunk["chunk_index"],
+                chunk["chunk_text"],
+                chunk["char_count"],
+                chunk["token_count"],
+                chunk.get("embedding_id"),
+            ))
+            inserted += 1
+
+    conn.commit()
+    return inserted
+
+
+def get_chunks_for_embedding(
+    conn: psycopg.Connection,
+    limit: int = 1000
+) -> list[dict]:
+    """Get chunks that don't have embeddings yet."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT chunk_id, doc_id, chunk_text
+            FROM chunks
+            WHERE embedding_id IS NULL
+            ORDER BY created_at ASC
+            LIMIT %s
+        """, (limit,))
+
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+# ─────────────────────────────────────────────
+# Embedding helpers
+# ─────────────────────────────────────────────
+def save_embeddings_to_db(conn: psycopg.Connection, chunks_with_embeddings: list[dict]) -> int:
+    """
+    Save embeddings to the database.
+    Returns number of embeddings saved.
+    """
+    if not chunks_with_embeddings:
+        return 0
+
+    inserted = 0
+    with conn.cursor() as cur:
+        for chunk in chunks_with_embeddings:
+            if chunk.get("embedding_vector") is None:
+                continue
+
+            cur.execute("""
+                INSERT INTO embeddings (
+                    embedding_id, chunk_id, model_name, dimensions, embedding_vector
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (embedding_id) DO UPDATE SET
+                    model_name = EXCLUDED.model_name,
+                    dimensions = EXCLUDED.dimensions,
+                    embedding_vector = EXCLUDED.embedding_vector
+            """, (
+                chunk["embedding_id"],
+                chunk["chunk_id"],
+                chunk["model_name"],
+                chunk["dimensions"],
+                chunk["embedding_vector"],
+            ))
+
+            # Update chunk with embedding reference
+            cur.execute("""
+                UPDATE chunks
+                SET embedding_id = %s
+                WHERE chunk_id = %s
+            """, (chunk["embedding_id"], chunk["chunk_id"]))
+
+            inserted += 1
+
+    conn.commit()
+    return inserted
+
+
+def search_similar_chunks(
+    conn: psycopg.Connection,
+    query_embedding: list[float],
+    model_name: str,
+    limit: int = 10,
+    min_similarity: float = 0.7
+) -> list[dict]:
+    """
+    Search for similar chunks using cosine similarity.
+    Returns chunks ordered by similarity score.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                c.chunk_id,
+                c.doc_id,
+                c.chunk_text,
+                c.chunk_index,
+                e.model_name,
+                1 - (e.embedding_vector <=> %s::vector) as similarity
+            FROM embeddings e
+            JOIN chunks c ON c.chunk_id = e.chunk_id
+            WHERE e.model_name = %s
+            AND 1 - (e.embedding_vector <=> %s::vector) >= %s
+            ORDER BY e.embedding_vector <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, model_name, query_embedding, min_similarity, limit))
+
+        cols = [desc[0] for desc in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]

@@ -4,3 +4,11 @@ python-docx
 streamlit
 pandas
 python-dotenv
+sentence-transformers>=2.2.0
+pgvector
+numpy
+torch
+transformers
+sentencepiece
+protobuf
+langchain-text-splitters
