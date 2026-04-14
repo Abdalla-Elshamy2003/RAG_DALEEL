@@ -30,30 +30,17 @@ from pathlib import Path
 
 import psycopg
 
-try:
-    from ingest_app.config import AppConfig
-    from ingest_app.db import (
-        create_tables,
-        insert_payload,
-    )
-    from ingest_app.file_utils import compute_sha256, iter_files
-    from ingest_app.payload_builders import (
-        build_docx_payload,
-        build_pdf_payload,
-        build_txt_payload,
-    )
-except ModuleNotFoundError:
-    from config import AppConfig
-    from db import (
-        create_tables,
-        insert_payload,
-    )
-    from file_utils import compute_sha256, iter_files
-    from payload_builders import (
-        build_docx_payload,
-        build_pdf_payload,
-        build_txt_payload,
-    )
+from ingest_app.config import AppConfig
+from ingest_app.db import (
+    create_tables,
+    insert_payload,
+)
+from .file_utils import compute_sha256, iter_files
+from .payload_builders import (
+    build_docx_payload,
+    build_pdf_payload,
+    build_txt_payload,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,8 +203,8 @@ def run_watcher(watch_folder: str, interval: int, db_conn: str | None = None):
         stats = scan_and_ingest(folder, cfg)
 
         log.info(
-            "   found=%d  inserted=%d  updated=%d  skipped=%d  failed=%d",
-            stats["found"], stats["inserted"], stats["updated"],
+            "   found=%d  inserted=%d  skipped=%d  failed=%d",
+            stats["found"], stats["inserted"],
             stats["skipped"], stats["failed"],
         )
 

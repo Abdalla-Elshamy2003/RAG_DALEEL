@@ -13,24 +13,14 @@ import pandas as pd
 import psycopg
 import streamlit as st
 
-try:
-    from ingest_app.config import AppConfig
-    from ingest_app.db import (
-        MAIN_TABLE, POST_TABLE,
-        create_tables, get_recent_records, get_stats,
-        insert_payload, sync_post_processing_from_main,
-    )
-    from ingest_app.file_utils import compute_sha256
-    from ingest_app.payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
-except ModuleNotFoundError:
-    from config import AppConfig
-    from db import (
-        MAIN_TABLE, POST_TABLE,
-        create_tables, get_recent_records, get_stats,
-        insert_payload, sync_post_processing_from_main,
-    )
-    from file_utils import compute_sha256
-    from payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
+from ingest_app.config import AppConfig
+from ingest_app.db import (
+    MAIN_TABLE, POST_TABLE,
+    create_tables, get_recent_records, get_stats,
+    insert_payload, sync_post_processing_from_main,
+)
+from preprocessing.file_utils import compute_sha256
+from preprocessing.payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
