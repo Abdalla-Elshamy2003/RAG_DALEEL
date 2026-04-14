@@ -60,16 +60,56 @@ def remove_single_english_letters(text: str) -> str:
 
 
 def should_remove_text(text: str) -> bool:
+    """Return True if the text is dominated by blocked AI keywords."""
     if not text:
         return False
     text_lower = text.lower()
     return any(kw in text_lower for kw in _AI_BLOCK_KEYWORDS)
 
 
+def normalize_text(text: str) -> str:
+    """
+    Safe structural cleaning only — no content removal.
+    - Normalise whitespace, line endings, control chars
+    - Deduplicate immediately-repeated paragraphs
+    """
+    if not text:
+        return ""
+    text = text.replace("\x00", " ").replace("\u00a0", " ").replace("\ufeff", "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    lines = [ln.strip() for ln in text.split("\n")]
+    lines = [ln for ln in lines if ln]
+
+    deduped: list[str] = []
+    for ln in lines:
+        if not deduped or ln != deduped[-1]:
+            deduped.append(ln)
+
+    return "\n".join(deduped).strip()
+
+
+def apply_content_filter(text: str) -> str:
+    """
+    Remove AI-related content from text:
+    - Strip AI model names
+    - Remove AI-related URLs
+    - Remove lone single English letters
+    """
+    if not text:
+        return ""
+    text = remove_ai_models_names(text)
+    text = remove_links_with_ai(text)
+    text = remove_single_english_letters(text)
+    return text
+
+
 def clean_text(text: str) -> str:
     """
-    Clean text:
-    - Remove blocks containing blocked AI keywords
+    Full cleaning pipeline — normalize then filter.
+    - Remove blocks containing blocked AI keywords (returns empty)
     - Strip AI model names
     - Remove AI-related URLs
     - Remove lone single English letters
@@ -80,26 +120,9 @@ def clean_text(text: str) -> str:
         return ""
     if should_remove_text(text):
         return ""
-
-    text = remove_ai_models_names(text)
-    text = remove_links_with_ai(text)
-    text = remove_single_english_letters(text)
-
-    text = text.replace("\x00", " ").replace("\u00a0", " ").replace("\ufeff", "")
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    lines = [ln.strip() for ln in text.split("\n")]
-    lines = [ln for ln in lines if ln]
-
-    # Deduplicate immediately-repeated paragraphs
-    deduped: list[str] = []
-    for ln in lines:
-        if not deduped or ln != deduped[-1]:
-            deduped.append(ln)
-
-    return "\n".join(deduped).strip()
+    text = apply_content_filter(text)
+    text = normalize_text(text)
+    return text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +189,7 @@ def extract_entities(text: str) -> list[str]:
     freq: dict[str, int] = {}
     for e in combined:
         freq[e] = freq.get(e, 0) + 1
-    entities = [e for e, c in freq.items() if c <= 4]
+    entities = [e for e, c in sorted(freq.items(), key=lambda x: -x[1]) if c >= 2]
     return entities[:15]
 
 

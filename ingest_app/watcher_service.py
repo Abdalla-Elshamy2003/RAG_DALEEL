@@ -4,6 +4,9 @@ watcher_service.py
 Background service that watches a folder and auto-ingests new files
 into PostgreSQL every POLL_INTERVAL seconds.
 
+Responsibility: write to ``preprocessing_data`` ONLY.
+``post_processing_data`` is left for a separate detached job.
+
 Usage:
     python watcher_service.py --folder /data/documents --interval 30
 
@@ -16,11 +19,13 @@ Environment variables (override defaults):
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import signal
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import psycopg
@@ -29,11 +34,7 @@ try:
     from ingest_app.config import AppConfig
     from ingest_app.db import (
         create_tables,
-        get_existing_hashes,
-        get_hash_by_filepath,
         insert_payload,
-        insert_post_processing_payload,
-        sync_post_processing_from_main,
     )
     from ingest_app.file_utils import compute_sha256, iter_files
     from ingest_app.payload_builders import (
@@ -45,11 +46,7 @@ except ModuleNotFoundError:
     from config import AppConfig
     from db import (
         create_tables,
-        get_existing_hashes,
-        get_hash_by_filepath,
         insert_payload,
-        insert_post_processing_payload,
-        sync_post_processing_from_main,
     )
     from file_utils import compute_sha256, iter_files
     from payload_builders import (
@@ -107,16 +104,21 @@ def _build_payload(file_path: Path, file_hash: str):
     raise ValueError(f"Unsupported extension: {ext}")
 
 
+# Cache to store mtime of files to avoid redundant hashing
+_MTIME_CACHE: dict[Path, float] = {}
+
+
 def scan_and_ingest(watch_folder: Path, cfg: AppConfig) -> dict:
     """
-    Scan watch_folder for new or modified files and ingest/update them.
-
-    Logic:
-    - NEW file    (path not in DB)              → insert
-    - MODIFIED file (path in DB, hash changed)  → update (upsert)
-    - UNCHANGED file (path in DB, same hash)    → skip
+    Scan watch_folder and INSERT all files to DB.
+    Allows duplicates - same file will create multiple records.
+    Uses mtime cache to avoid reprocessing unchanged files in same session.
     """
-    stats = {"found": 0, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+    stats = {"found": 0, "inserted": 0, "skipped": 0, "failed": 0}
+
+    if not watch_folder.exists():
+        log.warning("Watch folder missing: %s. Skipping this cycle.", watch_folder)
+        return stats
 
     files = list(iter_files(watch_folder))
     stats["found"] = len(files)
@@ -128,62 +130,52 @@ def scan_and_ingest(watch_folder: Path, cfg: AppConfig) -> dict:
         with psycopg.connect(cfg.db_conn) as conn:
             create_tables(conn)
 
-            # 1. Hash all files
-            hash_map: dict[Path, str] = {}
+            # 1. mtime check — skip files unchanged since last cycle
+            to_process: list[Path] = []
             for fp in files:
                 try:
-                    hash_map[fp] = compute_sha256(fp)
+                    mtime = fp.stat().st_mtime
+                    if _MTIME_CACHE.get(fp) == mtime:
+                        continue
+                    to_process.append(fp)
                 except Exception as exc:
-                    log.warning("Cannot hash %s: %s", fp, exc)
+                    log.warning("Cannot check file %s: %s", fp, exc)
                     stats["failed"] += 1
 
-            # 2. Get existing hash per file_path from DB
-            fp_strings = [str(fp).replace("\\", "/") for fp in hash_map]
-            known_path_hash = get_hash_by_filepath(conn, fp_strings)
+            if not to_process:
+                stats["skipped"] = stats["found"] - stats["failed"]
+                return stats
 
-            # 3. Also get existing hashes to avoid treating a renamed file as new
-            existing_hashes = get_existing_hashes(conn, list(hash_map.values()))
+            # 2. Parallel payload extraction via ThreadPoolExecutor
+            processed_payloads: list[tuple[Path, dict]] = []
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_file = {
+                    executor.submit(_build_payload, fp, compute_sha256(fp)): fp
+                    for fp in to_process
+                }
 
-            for fp, fhash in hash_map.items():
-                fp_str = str(fp).replace("\\", "/")
-                db_hash = known_path_hash.get(fp_str)
+                for future in as_completed(future_to_file):
+                    fp = future_to_file[future]
+                    try:
+                        payload = future.result()
+                        processed_payloads.append((fp, payload))
+                    except Exception as exc:
+                        stats["failed"] += 1
+                        log.error("Extraction failed: %s -> %s", fp.name, exc)
 
-                # UNCHANGED — same path, same hash
-                if db_hash == fhash:
-                    stats["skipped"] += 1
-                    continue
-
-                # MODIFIED — same path, different hash
-                is_update = db_hash is not None and db_hash != fhash
-
-                # NEW duplicate hash (different path, same content) — skip
-                if not is_update and fhash in existing_hashes:
-                    stats["skipped"] += 1
-                    continue
-
+            # 3. Sequential DB insertion
+            for fp, payload in processed_payloads:
                 try:
-                    payload = _build_payload(fp, fhash)
                     insert_payload(conn, payload)
-                    insert_post_processing_payload(conn, payload)
                     conn.commit()
-                    if is_update:
-                        stats["updated"] += 1
-                        log.info("🔄  Updated:  %s", fp.name)
-                    else:
-                        stats["inserted"] += 1
-                        log.info("✅  Inserted: %s", fp.name)
+
+                    _MTIME_CACHE[fp] = fp.stat().st_mtime
+                    stats["inserted"] += 1
+                    log.info("Inserted: %s", fp.name)
                 except Exception as exc:
                     conn.rollback()
                     stats["failed"] += 1
-                    log.error("❌  Failed:   %s  →  %s", fp.name, exc)
-
-            # 4. Sync preprocessing → post_processing if anything changed
-            if stats["inserted"] + stats["updated"] > 0:
-                try:
-                    synced = sync_post_processing_from_main(conn)
-                    log.info("🔄  Synced %d records to post_processing_data.", synced)
-                except Exception as exc:
-                    log.warning("Sync warning: %s", exc)
+                    log.error("DB failed: %s -> %s", fp.name, exc)
 
     except Exception as exc:
         log.error("DB connection error: %s", exc)
@@ -197,14 +189,17 @@ def scan_and_ingest(watch_folder: Path, cfg: AppConfig) -> dict:
 
 def run_watcher(watch_folder: str, interval: int, db_conn: str | None = None):
     folder = Path(watch_folder)
+
+    # Create folder if it doesn't exist (especially for default ./data)
     if not folder.exists():
-        log.error("Watch folder does not exist: %s", folder)
-        sys.exit(1)
+        log.info("Watch folder %s not found. Attempting to create...", folder)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            log.warning("Could not create folder: %s. Watcher will wait for it to appear.", exc)
 
     cfg = AppConfig()
-    # Override DB connection if provided
     if db_conn:
-        import dataclasses
         cfg = dataclasses.replace(cfg, db_conn=db_conn)
 
     log.info("=" * 60)
@@ -216,13 +211,14 @@ def run_watcher(watch_folder: str, interval: int, db_conn: str | None = None):
     cycle = 0
     while _RUNNING:
         cycle += 1
-        log.info("── Cycle #%d ─────────────────────────────────", cycle)
+        log.info("-- Cycle #%d --", cycle)
 
         stats = scan_and_ingest(folder, cfg)
 
         log.info(
             "   found=%d  inserted=%d  updated=%d  skipped=%d  failed=%d",
-            stats["found"], stats["inserted"], stats["updated"], stats["skipped"], stats["failed"],
+            stats["found"], stats["inserted"], stats["updated"],
+            stats["skipped"], stats["failed"],
         )
 
         # Sleep in small chunks so SIGTERM is caught quickly

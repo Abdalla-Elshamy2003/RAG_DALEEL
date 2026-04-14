@@ -37,12 +37,12 @@ def _create_one_table(conn: psycopg.Connection, table: str) -> None:
                 ON {table} USING GIN (payload);
         """)
         cur.execute(f"""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_file_hash_unique
+            CREATE INDEX IF NOT EXISTS idx_{table}_file_hash
                 ON {table}(file_hash);
         """)
-        # Drop old markdown_text column if exists
         cur.execute(f"""
-            ALTER TABLE {table} DROP COLUMN IF EXISTS markdown_text;
+            CREATE INDEX IF NOT EXISTS idx_{table}_file_path
+                ON {table}(file_path);
         """)
     conn.commit()
 
@@ -86,6 +86,7 @@ def get_hash_by_filepath(conn: psycopg.Connection, file_paths: list[str]) -> dic
 # Insert helpers
 # ─────────────────────────────────────────────
 def _insert_into(conn: psycopg.Connection, table: str, payload: dict[str, Any]) -> None:
+    """Simple INSERT - allows duplicate file_path entries."""
     with conn.cursor() as cur:
         cur.execute(f"""
             INSERT INTO {table} (
@@ -93,16 +94,6 @@ def _insert_into(conn: psycopg.Connection, table: str, payload: dict[str, Any]) 
                 source_type, extraction_status, language, page_count, payload
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (file_hash) DO UPDATE SET
-                doc_id = EXCLUDED.doc_id,
-                file_name = EXCLUDED.file_name,
-                file_path = EXCLUDED.file_path,
-                file_ext = EXCLUDED.file_ext,
-                source_type = EXCLUDED.source_type,
-                extraction_status = EXCLUDED.extraction_status,
-                language = EXCLUDED.language,
-                page_count = EXCLUDED.page_count,
-                payload = EXCLUDED.payload
         """, (
             payload.get("doc_id"),
             payload.get("file_name"),
@@ -130,8 +121,8 @@ def insert_post_processing_payload(conn: psycopg.Connection, payload: dict[str, 
 # ─────────────────────────────────────────────
 def sync_post_processing_from_main(conn: psycopg.Connection) -> int:
     """
-    Copy or update every row from preprocessing_data to post_processing_data.
-    Returns the number of rows affected.
+    Copy all rows from preprocessing_data to post_processing_data.
+    Allows duplicates - every sync creates new copies.
     """
     with conn.cursor() as cur:
         cur.execute(f"""
@@ -142,17 +133,7 @@ def sync_post_processing_from_main(conn: psycopg.Connection) -> int:
             SELECT
                 doc_id, file_name, file_path, file_ext, file_hash,
                 source_type, extraction_status, language, page_count, payload
-            FROM {MAIN_TABLE}
-            ON CONFLICT (file_hash) DO UPDATE SET
-                doc_id = EXCLUDED.doc_id,
-                file_name = EXCLUDED.file_name,
-                file_path = EXCLUDED.file_path,
-                file_ext = EXCLUDED.file_ext,
-                source_type = EXCLUDED.source_type,
-                extraction_status = EXCLUDED.extraction_status,
-                language = EXCLUDED.language,
-                page_count = EXCLUDED.page_count,
-                payload = EXCLUDED.payload;
+            FROM {MAIN_TABLE};
         """)
         copied = cur.rowcount
     conn.commit()

@@ -17,9 +17,8 @@ try:
     from ingest_app.config import AppConfig
     from ingest_app.db import (
         MAIN_TABLE, POST_TABLE,
-        create_tables, get_existing_hashes, get_recent_records, get_stats,
-        insert_payload, insert_post_processing_payload,
-        sync_post_processing_from_main,
+        create_tables, get_recent_records, get_stats,
+        insert_payload, sync_post_processing_from_main,
     )
     from ingest_app.file_utils import compute_sha256
     from ingest_app.payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
@@ -27,9 +26,8 @@ except ModuleNotFoundError:
     from config import AppConfig
     from db import (
         MAIN_TABLE, POST_TABLE,
-        create_tables, get_existing_hashes, get_recent_records, get_stats,
-        insert_payload, insert_post_processing_payload,
-        sync_post_processing_from_main,
+        create_tables, get_recent_records, get_stats,
+        insert_payload, sync_post_processing_from_main,
     )
     from file_utils import compute_sha256
     from payload_builders import build_docx_payload, build_pdf_payload, build_txt_payload
@@ -56,11 +54,7 @@ def get_document_pages(conn, doc_id, table="preprocessing_data"):
     if not row:
         return {}
     payload = row[4] or {}
-    # Check if new structure with legacy_payload
-    if "legacy_payload" in payload:
-        pages = payload["legacy_payload"].get("pages", [])
-    else:
-        pages = payload.get("pages", [])
+    pages = payload.get("pages", [])
     return {
         "file_name":   row[0],
         "source_type": row[1],
@@ -279,7 +273,6 @@ with tab_upload:
             try:
                 with psycopg.connect(cfg.db_conn) as conn:
                     create_tables(conn)
-                    sync_post_processing_from_main(conn)
 
                     for i, uf in enumerate(uploaded_files):
                         status.markdown(f"⏳ **معالجة** `{uf.name}` ({i+1}/{total})")
@@ -292,10 +285,6 @@ with tab_upload:
 
                         try:
                             file_hash = compute_sha256(tmp_path)
-
-                            if file_hash in get_existing_hashes(conn, [file_hash]):
-                                results.append(("skip", uf.name, "موجود بالفعل في الجدول الرئيسي"))
-                                continue
 
                             ext = tmp_path.suffix.lower()
                             if   ext == ".pdf":  payload = build_pdf_payload(tmp_path, file_hash)
@@ -315,7 +304,6 @@ with tab_upload:
                             payload["file_path"] = f"uploaded/{uf.name}"
 
                             insert_payload(conn, payload)
-                            insert_post_processing_payload(conn, payload)
                             conn.commit()
 
                             pages = payload.get("page_count", 0)
@@ -491,20 +479,18 @@ with tab_viewer:
             )
 
             if view_mode == "🔧 المخرجات الجديدة":
-                # Show new outputs
                 full_payload = doc.get("payload", {})
                 structured_json = full_payload.get("structured_json", {})
-                raw_cleaned = structured_json.get("text_raw", "")
-                markdown_text = structured_json.get("markdown_text", "")
+                content = full_payload.get("content", "")
+                markdown_text = full_payload.get("markdown_text", "")
 
-                st.markdown("### 1) Text Raw")
-                st.text_area("النص الخام", raw_cleaned, height=200, key="raw_cleaned")
+                st.markdown("### 1) Content (cleaned)")
+                st.text_area("النص المعالج", content, height=200, key="raw_cleaned")
 
                 st.markdown("### 2) Structured JSON")
                 st.json(structured_json)
-                
-                # Show links separately if present
-                links = structured_json.get("link", [])
+
+                links = full_payload.get("links", [])
                 if links:
                     st.markdown("### روابط مستخرجة")
                     for link in links:
@@ -626,7 +612,6 @@ with tab_reprocess:
                             
                             # Update payload
                             insert_payload(conn, payload)
-                            insert_post_processing_payload(conn, payload)
                             conn.commit()
                             
                             pages = payload.get("page_count", 0)
@@ -653,14 +638,6 @@ with tab_reprocess:
         mc1.metric("✅ تم التحديث", sum(1 for r in results if r[0]=="update"))
         mc2.metric("⚠️ تم التخطي", sum(1 for r in results if r[0]=="skip"))
         mc3.metric("❌ فشل", sum(1 for r in results if r[0]=="fail"))
-        
-        # Sync to post_processing_data (open fresh connection — previous one is closed)
-        try:
-            with psycopg.connect(cfg.db_conn) as sync_conn:
-                sync_count = sync_post_processing_from_main(sync_conn)
-            st.info(f"🔄 تم مزامنة {sync_count} سجل إلى post_processing_data")
-        except Exception as e:
-            st.warning(f"تحذير في المزامنة: {e}")
         
         st.markdown('<hr class="hr">', unsafe_allow_html=True)
         render_stats("after_reprocess")

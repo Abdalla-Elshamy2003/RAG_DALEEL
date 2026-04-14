@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
+from dotenv import load_dotenv
 
+load_dotenv()
 
 @dataclass(frozen=True)
 class AppConfig:
-    db_conn: str = "host=135.181.117.17 port=5432 dbname=docs_ingestion user=abdu password=Neurix@123!@#"
+    db_conn: str = field(default_factory=lambda: os.environ.get("DB_CONN", ""))
+
+    def __post_init__(self):
+        if not self.db_conn:
+            raise ValueError("DB_CONN environment variable is not set. Please create a .env file.")
