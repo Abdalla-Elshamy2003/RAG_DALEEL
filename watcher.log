@@ -1,1 +1,120 @@
 2026-04-11 10:28:00  [ERROR]  Watch folder does not exist: data
+2026-04-16 11:23:00  [INFO]  ============================================================
+2026-04-16 11:23:00  [INFO]    Watcher Service started
+2026-04-16 11:23:00  [INFO]    Folder  : E:\RAG_DALEEL\RAG_DALEEL\Data 2
+2026-04-16 11:23:00  [INFO]    Interval: 30s
+2026-04-16 11:23:00  [INFO]  ============================================================
+2026-04-16 11:23:00  [INFO]  -- Cycle #1 --
+2026-04-16 11:25:10  [ERROR]  DB connection error: connection timeout expired
+2026-04-16 11:25:10  [INFO]     found=45  inserted=0  skipped=0  failed=0
+2026-04-16 11:25:40  [INFO]  -- Cycle #2 --
+2026-04-16 11:25:40  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:25:40  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:26:10  [INFO]  -- Cycle #3 --
+2026-04-16 11:26:10  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:26:10  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:26:40  [INFO]  -- Cycle #4 --
+2026-04-16 11:26:40  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:26:40  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:27:10  [INFO]  -- Cycle #5 --
+2026-04-16 11:27:10  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:27:10  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:27:40  [INFO]  -- Cycle #6 --
+2026-04-16 11:27:40  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:27:40  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:28:10  [INFO]  -- Cycle #7 --
+2026-04-16 11:28:10  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:28:10  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:28:40  [INFO]  -- Cycle #8 --
+2026-04-16 11:28:40  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:28:40  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:29:10  [INFO]  -- Cycle #9 --
+2026-04-16 11:29:10  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:29:10  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:29:40  [INFO]  -- Cycle #10 --
+2026-04-16 11:29:40  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:29:40  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:30:10  [INFO]  -- Cycle #11 --
+2026-04-16 11:30:10  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:30:10  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:30:41  [INFO]  -- Cycle #12 --
+2026-04-16 11:30:41  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:30:41  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:31:11  [INFO]  -- Cycle #13 --
+2026-04-16 11:31:11  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:31:11  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:31:41  [INFO]  -- Cycle #14 --
+2026-04-16 11:31:41  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:31:41  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:32:11  [INFO]  -- Cycle #15 --
+2026-04-16 11:32:11  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:32:11  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:32:41  [INFO]  -- Cycle #16 --
+2026-04-16 11:32:41  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:32:41  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:33:12  [INFO]  -- Cycle #17 --
+2026-04-16 11:33:12  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:33:12  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:33:42  [INFO]  -- Cycle #18 --
+2026-04-16 11:33:42  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:33:42  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:34:12  [INFO]  -- Cycle #19 --
+2026-04-16 11:34:12  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:34:12  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:34:42  [INFO]  -- Cycle #20 --
+2026-04-16 11:34:42  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:34:42  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:35:13  [INFO]  -- Cycle #21 --
+2026-04-16 11:35:13  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:35:13  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:35:43  [INFO]  -- Cycle #22 --
+2026-04-16 11:35:43  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:35:43  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:36:13  [INFO]  -- Cycle #23 --
+2026-04-16 11:36:13  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:36:13  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:36:43  [INFO]  -- Cycle #24 --
+2026-04-16 11:36:43  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:36:43  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:37:13  [INFO]  -- Cycle #25 --
+2026-04-16 11:37:13  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:37:13  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:37:44  [INFO]  -- Cycle #26 --
+2026-04-16 11:37:44  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:37:44  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:38:14  [INFO]  -- Cycle #27 --
+2026-04-16 11:38:14  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:38:14  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:38:44  [INFO]  -- Cycle #28 --
+2026-04-16 11:38:44  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:38:44  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:39:14  [INFO]  -- Cycle #29 --
+2026-04-16 11:39:14  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:39:14  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:39:44  [INFO]  -- Cycle #30 --
+2026-04-16 11:39:44  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:39:44  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:40:15  [INFO]  -- Cycle #31 --
+2026-04-16 11:40:15  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:40:15  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:40:45  [INFO]  -- Cycle #32 --
+2026-04-16 11:40:45  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:40:45  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:41:15  [INFO]  -- Cycle #33 --
+2026-04-16 11:41:15  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:41:15  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:41:45  [INFO]  -- Cycle #34 --
+2026-04-16 11:41:45  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:41:45  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:42:15  [INFO]  -- Cycle #35 --
+2026-04-16 11:42:15  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:42:15  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:42:45  [INFO]  -- Cycle #36 --
+2026-04-16 11:42:46  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:42:46  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:43:16  [INFO]  -- Cycle #37 --
+2026-04-16 11:43:16  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:43:16  [INFO]     found=0  inserted=0  skipped=0  failed=0
+2026-04-16 11:43:46  [INFO]  -- Cycle #38 --
+2026-04-16 11:43:46  [WARNING]  Watch folder missing: Data 2. Skipping this cycle.
+2026-04-16 11:43:46  [INFO]     found=0  inserted=0  skipped=0  failed=0

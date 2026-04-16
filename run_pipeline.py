@@ -24,6 +24,7 @@ import psycopg
 
 from chunking import ChunkConfig, run_chunking
 from embedding import EmbeddingConfig, run_incremental_embeddings
+from embedding.config import EMBEDDING_MODEL_LABEL, EMBEDDING_MODEL_NAME
 from ingest_app.config import AppConfig
 from ingest_app.db import create_tables, insert_payload
 from preprocessing import run_ingestion
@@ -205,8 +206,13 @@ def _parse_args():
     # Embedding options
     parser.add_argument(
         "--model-name",
-        default="BAAI/bge-m3",
-        help="Embedding model name (default: BAAI/bge-m3)",
+        default=EMBEDDING_MODEL_NAME,
+        help="Embedding model path or Hugging Face id",
+    )
+    parser.add_argument(
+        "--model-label",
+        default=EMBEDDING_MODEL_LABEL,
+        help="Canonical embedding model label stored in the database",
     )
     parser.add_argument(
         "--batch-size",
@@ -230,6 +236,7 @@ if __name__ == "__main__":
 
     embed_cfg = EmbeddingConfig(
         model_name=args.model_name,
+        model_label=args.model_label,
         batch_size=args.batch_size,
     )
 

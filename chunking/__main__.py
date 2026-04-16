@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 
 from . import ChunkConfig, run_chunking
+from embedding.config import EMBEDDING_MODEL_NAME
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run chunking only")
     parser.add_argument("--db-conn", default=None)
-    parser.add_argument("--tokenizer-model", default="BAAI/bge-m3")
+    parser.add_argument("--tokenizer-model", default=EMBEDDING_MODEL_NAME)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--doc-id", default=None)
     parser.add_argument("--file-hash", default=None)

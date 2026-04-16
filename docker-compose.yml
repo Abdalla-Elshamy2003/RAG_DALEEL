@@ -29,3 +29,14 @@ services:
     restart: unless-stopped
     depends_on:
       - streamlit
+
+  # ── Embedding Watcher / Auto-embedding service ─────────────────────────────
+  embedding_watcher:
+    build: .
+    container_name: docs_embedding_watcher
+    command: python -m embedding --watch --interval 30
+    environment:
+      - DB_CONN=${DB_CONN}
+    restart: unless-stopped
+    depends_on:
+      - streamlit

@@ -22,6 +22,7 @@ from .chunking_db_langchain import (
     insert_parent_chunks,
 )
 from .config import ChunkConfig, STRATEGY_NAME, STRATEGY_VERSION
+from embedding.config import EMBEDDING_MODEL_NAME
 from .recursive_chunker import RecursiveParentChildChunker
 
 
@@ -34,7 +35,7 @@ def _resolve_db_conn(cli_value: str | None) -> str:
 def run_chunking(
     *,
     db_conn: str | None = None,
-    tokenizer_model: str = "BAAI/bge-m3",
+    tokenizer_model: str = EMBEDDING_MODEL_NAME,
     limit: int | None = None,
     doc_id: str | None = None,
     file_hash: str | None = None,

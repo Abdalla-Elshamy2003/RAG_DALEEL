@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import time
 
 from . import EmbeddingConfig, run_incremental_embeddings
+from .config import EMBEDDING_MODEL_LABEL, EMBEDDING_MODEL_NAME
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run embeddings only")
     parser.add_argument("--db-conn", default=None)
-    parser.add_argument("--model-name", default="BAAI/bge-m3")
+    parser.add_argument("--model-name", default=EMBEDDING_MODEL_NAME)
+    parser.add_argument("--model-label", default=EMBEDDING_MODEL_LABEL)
     parser.add_argument("--doc-id", default=None)
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--watch", action="store_true", help="Run continuously, checking for new chunks every --interval seconds")
+    parser.add_argument("--interval", type=int, default=30, help="Interval in seconds to check for new chunks when watching")
 
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--fetch-limit", type=int, default=128)
@@ -26,6 +32,7 @@ def main() -> int:
 
     cfg = EmbeddingConfig(
         model_name=args.model_name,
+        model_label=args.model_label,
         batch_size=args.batch_size,
         fetch_limit=args.fetch_limit,
         max_length=args.max_length,
@@ -37,12 +44,33 @@ def main() -> int:
         log_level=args.log_level,
     )
 
-    return run_incremental_embeddings(
-        db_conn=args.db_conn,
-        model_name=args.model_name,
-        only_doc_id=args.doc_id,
-        config=cfg,
-    )
+    if args.watch:
+        logger = logging.getLogger("embedding_watcher")
+        logger.info("Starting embedding watcher service, checking every %d seconds", args.interval)
+        
+        while True:
+            try:
+                result = run_incremental_embeddings(
+                    db_conn=args.db_conn,
+                    model_name=args.model_name,
+                    only_doc_id=args.doc_id,
+                    config=cfg,
+                )
+                if result == 0:
+                    logger.info("No new chunks to embed, sleeping for %d seconds", args.interval)
+                else:
+                    logger.info("Processed embeddings, checking again in %d seconds", args.interval)
+            except Exception as e:
+                logger.error("Error in embedding watcher: %s", e)
+            
+            time.sleep(args.interval)
+    else:
+        return run_incremental_embeddings(
+            db_conn=args.db_conn,
+            model_name=args.model_name,
+            only_doc_id=args.doc_id,
+            config=cfg,
+        )
 
 
 if __name__ == "__main__":
