@@ -10,9 +10,22 @@ python-dotenv
 streamlit
 pandas
 
+# Environment and utilities
+python-dotenv
+
 # Summarization pipeline
 dspy-ai
-sentence-transformers
+sentence-transformers>=2.2.0
 requests
 numpy
 scikit-learn
+
+# Embeddings and transformers
+pgvector
+torch
+transformers
+sentencepiece
+protobuf
+
+# Text processing
+langchain-text-splitters
