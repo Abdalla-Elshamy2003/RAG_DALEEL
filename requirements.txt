@@ -1,0 +1,18 @@
+# Database
+psycopg[binary]
+
+# Document processing
+PyMuPDF
+python-docx
+python-dotenv
+
+# Web UI
+streamlit
+pandas
+
+# Summarization pipeline
+dspy-ai
+sentence-transformers
+requests
+numpy
+scikit-learn
