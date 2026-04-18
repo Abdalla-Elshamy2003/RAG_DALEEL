@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import time
+import json
 from typing import Optional
 
 # Add current directory to path
@@ -26,6 +27,57 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("pipeline")
+
+# ── Checkpointing ────────────────────────────────────────────────────────────
+
+CHECKPOINT_FILE = "summarization_checkpoint.json"
+
+def save_checkpoint(last_doc_pk: int, start_doc: int = None, end_doc: int = None):
+    """Save progress checkpoint"""
+    checkpoint = {
+        "last_doc_pk": last_doc_pk,
+        "start_doc": start_doc,
+        "end_doc": end_doc,
+        "timestamp": time.time()
+    }
+    try:
+        with open(CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+            json.dump(checkpoint, f, indent=2)
+        logger.info(f"💾 Checkpoint saved: last_doc_pk={last_doc_pk}")
+    except Exception as e:
+        logger.warning(f"Failed to save checkpoint: {e}")
+
+def load_checkpoint():
+    """Load progress checkpoint"""
+    if not os.path.exists(CHECKPOINT_FILE):
+        return None
+    
+    try:
+        with open(CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load checkpoint: {e}")
+        return None
+
+def show_checkpoint_status():
+    """Show current checkpoint status"""
+    checkpoint = load_checkpoint()
+    if checkpoint:
+        logger.info("📊 Checkpoint Status:")
+        logger.info(f"   Last processed doc: {checkpoint['last_doc_pk']}")
+        logger.info(f"   Range: {checkpoint.get('start_doc', 'N/A')} - {checkpoint.get('end_doc', 'N/A')}")
+        logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(checkpoint['timestamp']))}")
+    else:
+        logger.info("📊 No checkpoint found - will start fresh")
+
+def clear_checkpoint():
+    """Clear checkpoint file"""
+    if os.path.exists(CHECKPOINT_FILE):
+        try:
+            os.remove(CHECKPOINT_FILE)
+            logger.info("🗑️ Checkpoint cleared")
+        except Exception as e:
+            logger.warning(f"Failed to clear checkpoint: {e}")
 
 
 # ── Lazy singletons (Memory Safety for RTX 2060) ─────────────────────────────
@@ -70,7 +122,9 @@ def run_level1_for_doc(doc_pk: int) -> list[int]:
             continue
 
         text = (parent.get("text") or "").strip()
-        if not text: continue
+        if not text:
+            logger.warning(f"  [L1] Skipping empty parent chunk (ID={parent_row_id})")
+            continue
 
         language = parent.get("language") or doc.get("language") or "ar"
 
@@ -81,9 +135,18 @@ def run_level1_for_doc(doc_pk: int) -> list[int]:
             chunk_text=text,
             doc_title=doc_title,
         )
+        
+        # Validate summary is not empty
+        if not summary_text or not summary_text.strip():
+            logger.warning(f"  [L1] Skipping - empty summary for parent chunk (ID={parent_row_id})")
+            continue
 
         # 2. Embed (BGE-M3 on CPU)
-        embedding = embedder.embed(summary_text)
+        try:
+            embedding = embedder.embed(summary_text)
+        except Exception as e:
+            logger.error(f"  [L1] Embedding failed for parent {parent_row_id}: {e}")
+            continue
 
         metadata = {
             "doc_pk": doc_pk,
@@ -121,6 +184,11 @@ def run_level2_for_doc(doc_pk: int) -> Optional[int]:
     res = summarizer.summarize_document(texts, doc_title)
     summary_text = res["text"]
     keywords = res["keywords"]
+    
+    # Validate summary is not empty
+    if not summary_text or not summary_text.strip():
+        logger.warning(f"  [L2] Document summary is empty for doc_pk={doc_pk}, using fallback")
+        summary_text = "\n".join(texts[:3]) if texts else "لا توجد ملخصات متاحة"
 
     # 2. Automated Quality Audit (Sampling)
     quality_audit = {}
@@ -149,9 +217,17 @@ def run_level2_for_doc(doc_pk: int) -> Optional[int]:
     }
 
     # 4. Embed and Save
+    try:
+        embedding = embedder.embed(summary_text)
+    except Exception as e:
+        logger.error(f"  [L2] Embedding failed for doc_pk={doc_pk}: {e}")
+        embedding = None
     
-    embedding = embedder.embed(summary_text)
-    return db.upsert_summary(level=2, source_id=doc_pk, summary_text=summary_text, metadata=metadata, embedding=embedding)
+    if embedding:
+        return db.upsert_summary(level=2, source_id=doc_pk, summary_text=summary_text, metadata=metadata, embedding=embedding)
+    else:
+        logger.warning(f"  [L2] Skipping summary save - no embedding for doc_pk={doc_pk}")
+        return None
 
 # def run_level2_for_doc(doc_pk: int) -> Optional[int]:
 #     l1_summaries = db.fetch_level1_summaries_for_doc(doc_pk)
@@ -281,13 +357,42 @@ def run_level3_clustering() -> int:
 
 # ── Execution Logic ──────────────────────────────────────────────────────────
 
-def run_backfill():
+def run_backfill(start_doc: int = None, end_doc: int = None, resume: bool = False):
     logger.info("=== BACKFILL START ===")
+    
+    # Load checkpoint if resuming
+    checkpoint = load_checkpoint() if resume else None
+    if resume and checkpoint:
+        logger.info(f"🔄 Resuming from checkpoint: last_doc_pk={checkpoint['last_doc_pk']}")
+        start_doc = checkpoint.get('start_doc') or start_doc
+        end_doc = checkpoint.get('end_doc') or end_doc
+        resume_from = checkpoint['last_doc_pk'] + 1
+    else:
+        resume_from = None
+        clear_checkpoint()  # Clear old checkpoint if not resuming
+    
     run_id = db.start_pipeline_run("backfill")
     doc_pks = db.fetch_all_doc_ids()
 
+    # Filter documents by range if specified
+    if start_doc is not None and end_doc is not None:
+        doc_pks = [pk for pk in doc_pks if start_doc <= pk <= end_doc]
+        logger.info(f"📋 Processing documents from {start_doc} to {end_doc} (filtered from {len(db.fetch_all_doc_ids())} total)")
+    elif start_doc is not None:
+        doc_pks = [pk for pk in doc_pks if pk >= start_doc]
+        logger.info(f"📋 Processing documents from {start_doc} onwards (filtered from {len(db.fetch_all_doc_ids())} total)")
+    elif end_doc is not None:
+        doc_pks = [pk for pk in doc_pks if pk <= end_doc]
+        logger.info(f"📋 Processing documents up to {end_doc} (filtered from {len(db.fetch_all_doc_ids())} total)")
+    
+    # If resuming, start from the next document
+    if resume_from:
+        doc_pks = [pk for pk in doc_pks if pk >= resume_from]
+        logger.info(f"🔄 Resuming from document {resume_from}")
+
     total_summaries = 0
     docs_done = 0
+    last_successful_doc = None
 
     for doc_pk in doc_pks:
         try:
@@ -296,11 +401,25 @@ def run_backfill():
             l2 = run_level2_for_doc(doc_pk)
             total_summaries += len(l1) + (1 if l2 else 0)
             docs_done += 1
+            last_successful_doc = doc_pk
+            
+            # Save checkpoint every 5 documents
+            if docs_done % 5 == 0:
+                save_checkpoint(last_successful_doc, start_doc, end_doc)
+                
         except Exception as exc:
             logger.error(f"Error on doc_pk {doc_pk}: {exc}")
+            # Save checkpoint on error too
+            if last_successful_doc:
+                save_checkpoint(last_successful_doc, start_doc, end_doc)
+            continue
 
     clusters = run_level3_clustering()
     db.finish_pipeline_run(run_id, docs=docs_done, summaries=total_summaries + clusters)
+    
+    # Clear checkpoint on successful completion
+    clear_checkpoint()
+    logger.info("✅ Backfill completed successfully!")
 
 def run_incremental(doc_id: int):
     run_id = db.start_pipeline_run("incremental")
@@ -359,20 +478,27 @@ def run_cleanup_chinese():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Arabic RAG Summarization Pipeline")
-    parser.add_argument("--mode", choices=["backfill", "incremental", "recluster", "cleanup-chinese"], required=True)
-    parser.add_argument("--doc-id", type=int)
+    parser.add_argument("--mode", choices=["backfill", "incremental", "recluster", "cleanup-chinese", "status"], required=True)
+    parser.add_argument("--doc-id", type=int, help="Document ID for incremental mode")
+    parser.add_argument("--start-doc", type=int, help="Start document ID for backfill range")
+    parser.add_argument("--end-doc", type=int, help="End document ID for backfill range")
+    parser.add_argument("--resume", action="store_true", help="Resume from last checkpoint")
     args = parser.parse_args()
+    
+    print(f"DEBUG: mode={args.mode}, resume={args.resume}")  # Debug print
 
     db.init_pool()
     t0 = time.time()
 
     if args.mode == "backfill":
-        run_backfill()
+        run_backfill(start_doc=args.start_doc, end_doc=args.end_doc, resume=args.resume)
     elif args.mode == "incremental" and args.doc_id:
         run_incremental(args.doc_id)
     elif args.mode == "recluster":
         run_level3_clustering()
     elif args.mode == "cleanup-chinese":
         run_cleanup_chinese()
+    elif args.mode == "status":
+        show_checkpoint_status()
 
     logger.info(f"Total time: {time.time() - t0:.1f}s")

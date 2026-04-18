@@ -83,7 +83,7 @@ class OllamaLM(dspy.LM):
         }
 
         try:
-            resp = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=180)
+            resp = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=config.ollama_timeout)
             resp.raise_for_status()
             text = resp.json().get("message", {}).get("content", "") or ""
             

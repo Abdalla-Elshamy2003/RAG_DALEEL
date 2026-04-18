@@ -57,6 +57,7 @@ class AppConfig:
     # ── LLM Generation Settings ────────────────────────────────────────────────
     llm_max_new_tokens: int = 512
     llm_temperature: float = 0.1
+    ollama_timeout: int = 600  # Increased timeout from 180 to 600 seconds (10 minutes)
 
     # ── Pipeline Behaviour ─────────────────────────────────────────────────────
     skip_done: bool = True
