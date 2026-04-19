@@ -1,26 +1,20 @@
-from __future__ import annotations
-
 import traceback
-from typing import Any, Dict, List
-
+import time
 import streamlit as st
-
 from rag_demo.core import RAGConfig, RAGEngine
 
-
+# Set up the page configuration
 st.set_page_config(
     page_title="RAG Daleel Assistant",
     page_icon="📚",
     layout="wide",
 )
 
-
 @st.cache_resource
 def load_engine() -> RAGEngine:
     config = RAGConfig()
     config.validate()
     return RAGEngine(config)
-
 
 def render_source_card(index: int, source: Dict[str, Any]) -> None:
     with st.expander(f"Source {index}: {source.get('source', 'Unknown')}", expanded=False):
@@ -49,7 +43,6 @@ def render_source_card(index: int, source: Dict[str, Any]) -> None:
             st.markdown("### Metadata")
             st.json(metadata)
 
-
 def render_sources(sources: List[Dict[str, Any]]) -> None:
     if not sources:
         st.warning("No sources returned.")
@@ -57,36 +50,6 @@ def render_sources(sources: List[Dict[str, Any]]) -> None:
 
     for i, source in enumerate(sources, start=1):
         render_source_card(i, source)
-
-
-def render_retrieved_contexts(contexts: List[Dict[str, Any]]) -> None:
-    """
-    Render the context of retrieved chunks, both parent and child content.
-    This is useful for debugging retrieval and reranking.
-    """
-    if not contexts:
-        st.warning("No contexts retrieved.")
-        return
-
-    st.subheader("Retrieved Contexts")
-
-    for i, context in enumerate(contexts, start=1):
-        st.markdown(f"### Context {i}")
-
-        # Display parent chunk content
-        st.write("**Parent Content:**")
-        st.write(context.get("parent_text", "No parent text available."))
-
-        # Display matched child chunks content
-        matched_children = context.get("matched_children", [])
-        if matched_children:
-            st.markdown("### Matched Child Chunks:")
-            for child in matched_children:
-                st.write(f"- **Child ID:** {child.get('child_id')}")
-                st.write(f"- **Child Text Preview:** {child.get('child_text')[:300]}")  # Preview the first 300 characters
-        else:
-            st.write("No matched child chunks available.")
-
 
 def main() -> None:
     st.title("📚 RAG Daleel Assistant")
@@ -98,7 +61,7 @@ def main() -> None:
         # User chooses whether to enable retrieval-only mode
         retrieval_only = st.checkbox(
             "Retrieval only",
-            value=False,
+            value=False,  # Set to False to enable model answer generation
             help="Use this while Ollama/Qwen is still downloading. It will not generate the final LLM answer.",
         )
 
@@ -136,6 +99,7 @@ def main() -> None:
         with st.spinner("Processing..."):
             engine = load_engine()
 
+        # If retrieval-only is enabled, perform only retrieval and reranking
         if retrieval_only:
             # Debug logging: Check if retrieval-only is set
             st.write("Retrieval only mode is ENABLED.")  # <-- Logging for debugging
@@ -156,7 +120,7 @@ def main() -> None:
             st.write("Answer generation is not enabled in this mode.")
             return
 
-        # Debug logging: Check if final answer generation is triggered
+        # If retrieval-only is disabled, proceed with the full pipeline
         st.write("Answer generation mode ENABLED.")  # <-- Logging for debugging
 
         # Full RAG pipeline (retrieval + reranking + final answer generation)
@@ -177,7 +141,6 @@ def main() -> None:
         st.code(str(exc))
         with st.expander("Full traceback"):
             st.code(traceback.format_exc())
-
 
 if __name__ == "__main__":
     main()

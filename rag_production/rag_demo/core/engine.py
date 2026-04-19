@@ -75,16 +75,12 @@ class RAGEngine:
             source_type=source_type,
         )
 
-        log.debug(f"Retrieved {len(internal_contexts)} internal contexts.")
-
         # 3. Rerank internal contexts
         internal_reranked = self.models.rerank(
             query=query,
             contexts=internal_contexts,
             top_k=self.config.rerank_top_k,
         )
-
-        log.debug(f"Reranked {len(internal_reranked)} internal contexts.")
 
         # 4. Confidence decision
         decision = evaluate_internal_results(
@@ -149,6 +145,7 @@ class RAGEngine:
         source_type: Optional[str] = None,
         answer_style: Optional[str] = None,
         debug: bool = False,
+        stream: bool = False,  # ← ADD THIS
     ) -> Dict[str, Any]:
         query = (query or "").strip()
 
@@ -163,7 +160,6 @@ class RAGEngine:
 
         log.info("RAG query started.")
 
-        # Retrieve and rerank contexts
         final_contexts, decision, used_web, debug_info = self.retrieve_contexts(
             query=query,
             use_web=use_web,
@@ -172,44 +168,27 @@ class RAGEngine:
             source_type=source_type,
         )
 
-        # Log the retrieved contexts count
-        log.debug(f"Final contexts retrieved: {len(final_contexts)}")
-
-        # Separate internal contexts from web contexts
         internal_contexts = [c for c in final_contexts if c.source_type == "internal"]
         web_contexts = [c for c in final_contexts if c.source_type != "internal"]
 
-        log.debug(f"Internal contexts count: {len(internal_contexts)}")
-        log.debug(f"Web contexts count: {len(web_contexts)}")
-
-        # Fetch full documents for internal contexts if necessary
         full_docs: List[FullDocContext] = []
         if internal_contexts:
-            log.info(f"Fetching full parent docs for {len(internal_contexts)} internal context(s).")
             full_docs = self.db.fetch_full_parent_docs(internal_contexts)
             debug_info["full_docs_fetched"] = len(full_docs)
             debug_info["full_doc_ids"] = [d.doc_id for d in full_docs]
 
-        log.debug(f"Full documents fetched: {len(full_docs)}")
-
-        # Generate final answer using the Synthesizer
+        # Return a dict with a streaming generator instead of a plain string
         answer = self.synthesizer.generate_response(
             query=query,
             contexts=final_contexts,
             used_web=used_web,
             full_docs=full_docs or None,
             answer_style=answer_style,
+            stream=stream,  # ← PASS IT THROUGH
         )
 
-        log.debug(f"Generated answer: {answer}")
-
-        # Check if the answer is valid
-        if not answer.strip():
-            answer = "Sorry, I couldn't find an answer to your question."
-
-        # Prepare result
         result: Dict[str, Any] = {
-            "answer": answer,
+            "answer": answer,  # str if stream=False, Iterator if stream=True
             "sources": [context.to_public_dict() for context in final_contexts],
             "used_web": used_web,
             "confidence": decision.confidence,
@@ -219,5 +198,4 @@ class RAGEngine:
             result["debug"] = debug_info
 
         log.info("RAG query finished.")
-
         return result
