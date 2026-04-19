@@ -300,7 +300,10 @@ class ProductionDatabase:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
 
-        return [self._row_to_context(dict(row)) for row in rows]
+        # Convert to RetrievedContext but only return the parent content to LLM
+        return [
+            self._row_to_context(dict(row)) for row in rows if "parent_text" in row
+        ]
 
     def fetch_full_parent_docs(
         self,

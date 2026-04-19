@@ -7,7 +7,7 @@ import streamlit as st
 
 from rag_demo.core import RAGConfig, RAGEngine
 
-# Set up the page configuration
+
 st.set_page_config(
     page_title="RAG Daleel Assistant",
     page_icon="📚",
@@ -57,6 +57,35 @@ def render_sources(sources: List[Dict[str, Any]]) -> None:
 
     for i, source in enumerate(sources, start=1):
         render_source_card(i, source)
+
+
+def render_retrieved_contexts(contexts: List[Dict[str, Any]]) -> None:
+    """
+    Render the context of retrieved chunks, both parent and child content.
+    This is useful for debugging retrieval and reranking.
+    """
+    if not contexts:
+        st.warning("No contexts retrieved.")
+        return
+
+    st.subheader("Retrieved Contexts")
+
+    for i, context in enumerate(contexts, start=1):
+        st.markdown(f"### Context {i}")
+
+        # Display parent chunk content
+        st.write("**Parent Content:**")
+        st.write(context.get("parent_text", "No parent text available."))
+
+        # Display matched child chunks content
+        matched_children = context.get("matched_children", [])
+        if matched_children:
+            st.markdown("### Matched Child Chunks:")
+            for child in matched_children:
+                st.write(f"- **Child ID:** {child.get('child_id')}")
+                st.write(f"- **Child Text Preview:** {child.get('child_text')[:300]}")  # Preview the first 300 characters
+        else:
+            st.write("No matched child chunks available.")
 
 
 def main() -> None:
@@ -118,6 +147,9 @@ def main() -> None:
             )
 
             st.success("Retrieved and reranked contexts.")
+
+            # Display retrieved contexts (parent and child content)
+            render_retrieved_contexts(contexts)
 
             # Display just the final answer
             st.markdown("## Answer")

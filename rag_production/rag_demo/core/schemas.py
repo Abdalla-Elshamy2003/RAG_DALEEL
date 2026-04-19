@@ -31,18 +31,14 @@ class RetrievedContext:
         return self.matched_children[0].child_text or ""
 
     def to_rerank_text(self, max_chars: int = 6000) -> str:
-        child_text = self.best_child_text()
         parent_text = self.text or ""
 
         combined = (
-            "Matched evidence:\n"
-            f"{child_text}\n\n"
             "Parent context:\n"
             f"{parent_text}"
         )
 
         return combined[:max_chars]
-
     def to_prompt_source(self, index: int, max_chars: int = 7000) -> str:
         child_text = self.best_child_text()
         parent_text = self.text or ""
@@ -98,3 +94,18 @@ class ConfidenceDecision:
     should_use_web: bool
     reason: str
     confidence: str
+
+
+# Add the FullDocContext class here
+@dataclass
+class FullDocContext:
+    doc_id: str
+    source: str
+    full_text: str
+    metadata: Dict[str, Any]
+
+    def to_llm_block(self, index: int, max_chars: int = 20_000) -> str:
+        """
+        Build the LLM block for the full document text (for large text processing).
+        """
+        return f"DOCUMENT {index}:\n{self.full_text[:max_chars]}"

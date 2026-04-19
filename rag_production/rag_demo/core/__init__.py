@@ -4,7 +4,7 @@ from .database import ProductionDatabase
 from .engine import RAGEngine
 from .model import GPUModelManager
 from .prompter import Synthesizer
-from .schemas import ChildEvidence, ConfidenceDecision, RetrievedContext
+from .schemas import ChildEvidence, ConfidenceDecision, FullDocContext, RetrievedContext
 from .tools import WebSearchTool
 
 __all__ = [
@@ -17,5 +17,6 @@ __all__ = [
     "evaluate_internal_results",
     "ChildEvidence",
     "RetrievedContext",
+    "FullDocContext",
     "ConfidenceDecision",
 ]

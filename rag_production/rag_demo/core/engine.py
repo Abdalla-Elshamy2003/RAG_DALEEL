@@ -13,7 +13,6 @@ from .tools import WebSearchTool
 
 log = logging.getLogger(__name__)
 
-
 class RAGEngine:
     """
     Production RAG Engine.
@@ -54,12 +53,11 @@ class RAGEngine:
         Retrieve and rerank evidence without generating the final LLM answer.
         Useful for debugging retrieval quality.
         """
-
         query = (query or "").strip()
 
         if not query:
             decision = ConfidenceDecision(
-                should_use_web=False,
+                should_use_web=True,
                 reason="Empty query.",
                 confidence="none",
             )
@@ -77,12 +75,16 @@ class RAGEngine:
             source_type=source_type,
         )
 
+        log.debug(f"Retrieved {len(internal_contexts)} internal contexts.")
+
         # 3. Rerank internal contexts
         internal_reranked = self.models.rerank(
             query=query,
             contexts=internal_contexts,
             top_k=self.config.rerank_top_k,
         )
+
+        log.debug(f"Reranked {len(internal_reranked)} internal contexts.")
 
         # 4. Confidence decision
         decision = evaluate_internal_results(
@@ -101,7 +103,7 @@ class RAGEngine:
         used_web = False
         final_contexts = internal_reranked
 
-        # 5. Optional web fallback
+        # 5. Web fallback if enabled and necessary
         if should_try_web:
             log.info("Trying web fallback. Reason: %s", decision.reason)
 
@@ -116,6 +118,9 @@ class RAGEngine:
                     contexts=combined_contexts,
                     top_k=self.config.rerank_top_k,
                 )
+
+        # Only return the combined, reranked contexts (internal + web)
+        final_contexts = [ctx for ctx in final_contexts if ctx.text]  # Focus on parent content
 
         debug_info = {
             "internal_retrieved_count": len(internal_contexts),
@@ -158,6 +163,7 @@ class RAGEngine:
 
         log.info("RAG query started.")
 
+        # Retrieve and rerank contexts
         final_contexts, decision, used_web, debug_info = self.retrieve_contexts(
             query=query,
             use_web=use_web,
@@ -166,38 +172,42 @@ class RAGEngine:
             source_type=source_type,
         )
 
-        # Separate internal contexts from web contexts.
-        # Full-doc fetching only applies to internal (DB) documents —
-        # web results already carry their full snippet text.
+        # Log the retrieved contexts count
+        log.debug(f"Final contexts retrieved: {len(final_contexts)}")
+
+        # Separate internal contexts from web contexts
         internal_contexts = [c for c in final_contexts if c.source_type == "internal"]
         web_contexts = [c for c in final_contexts if c.source_type != "internal"]
 
-        # Fetch the complete text of every retrieved internal document.
-        # This replaces the per-chunk snippet with the full parent doc content,
-        # giving the LLM far more context to work with.
+        log.debug(f"Internal contexts count: {len(internal_contexts)}")
+        log.debug(f"Web contexts count: {len(web_contexts)}")
+
+        # Fetch full documents for internal contexts if necessary
         full_docs: List[FullDocContext] = []
         if internal_contexts:
-            log.info(
-                "Fetching full parent docs for %d internal context(s).",
-                len(internal_contexts),
-            )
+            log.info(f"Fetching full parent docs for {len(internal_contexts)} internal context(s).")
             full_docs = self.db.fetch_full_parent_docs(internal_contexts)
             debug_info["full_docs_fetched"] = len(full_docs)
             debug_info["full_doc_ids"] = [d.doc_id for d in full_docs]
 
-        # If web results are present but no full docs, fall back to snippet mode
-        # for web contexts so they are still included in the answer.
-        # When both exist, full_docs take priority and web snippets are appended
-        # to the context_text inside the Synthesizer automatically via the
-        # fallback path in generate_response (contexts param still carries them).
+        log.debug(f"Full documents fetched: {len(full_docs)}")
+
+        # Generate final answer using the Synthesizer
         answer = self.synthesizer.generate_response(
             query=query,
-            contexts=final_contexts,   # kept for web results & fallback
+            contexts=final_contexts,
             used_web=used_web,
             full_docs=full_docs or None,
             answer_style=answer_style,
         )
 
+        log.debug(f"Generated answer: {answer}")
+
+        # Check if the answer is valid
+        if not answer.strip():
+            answer = "Sorry, I couldn't find an answer to your question."
+
+        # Prepare result
         result: Dict[str, Any] = {
             "answer": answer,
             "sources": [context.to_public_dict() for context in final_contexts],
