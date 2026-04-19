@@ -556,11 +556,40 @@ def run_cleanup_chinese():
         logger.error(f"Error during cleanup: {exc}")
         db.finish_pipeline_run(run_id, docs=0, summaries=0, error=str(exc))
 
+def run_clear_partial_summaries():
+    """Clear all partial (incomplete) summaries so they can be reprocessed from scratch."""
+    logger.info("=== CLEAR PARTIAL SUMMARIES START ===")
+    
+    run_id = db.start_pipeline_run("clear_partial")
+    doc_pks = db.fetch_all_doc_ids()
+    
+    cleared_count = 0
+    skipped_count = 0
+    
+    for doc_pk in doc_pks:
+        doc = db.fetch_doc_metadata(doc_pk)
+        if not doc:
+            continue
+        doc_id = doc.get("doc_id", "")
+        
+        # Check if fully summarized
+        if db.is_doc_fully_summarized(doc_pk, doc_id):
+            skipped_count += 1
+            continue
+        
+        # Not fully summarized - clear all its summaries
+        db.delete_partial_summaries_for_doc(doc_pk, doc_id)
+        cleared_count += 1
+        logger.info(f"Cleared partial summaries for doc_pk={doc_pk} ({doc.get('file_name', 'N/A')})")
+    
+    logger.info(f"✅ Cleared {cleared_count} documents, skipped {skipped_count} fully summarized documents")
+    db.finish_pipeline_run(run_id, docs=cleared_count, summaries=cleared_count)
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Arabic RAG Summarization Pipeline")
-    parser.add_argument("--mode", choices=["backfill", "incremental", "recluster", "cleanup-chinese", "status", "stats"], required=True)
+    parser.add_argument("--mode", choices=["backfill", "incremental", "recluster", "cleanup-chinese", "status", "stats", "clear-partial"], required=True)
     parser.add_argument("--doc-id", type=int, help="Document ID for incremental mode")
     parser.add_argument("--start-doc", type=int, help="Start document ID for backfill range")
     parser.add_argument("--end-doc", type=int, help="End document ID for backfill range")
@@ -584,5 +613,7 @@ if __name__ == "__main__":
         show_checkpoint_status()
     elif args.mode == "stats":
         show_summary_stats()
+    elif args.mode == "clear-partial":
+        run_clear_partial_summaries()
 
     logger.info(f"Total time: {time.time() - t0:.1f}s")

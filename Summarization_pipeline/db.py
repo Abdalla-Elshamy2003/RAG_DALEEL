@@ -266,6 +266,34 @@ def delete_summaries_at_level(level: int) -> None:
         logger.info(f"Deleted old Level {level} summaries.")
 
 
+def delete_partial_summaries_for_doc(doc_pk: int, doc_id: str) -> None:
+    """
+    Delete all L1 and L2 summaries for a document that wasn't fully completed.
+    This allows re-processing from scratch.
+    """
+    with get_cursor() as cur:
+        # Delete L2 summary if exists
+        cur.execute(
+            f"DELETE FROM {config.table_summaries} WHERE level = 2 AND source_id = %s",
+            (doc_pk,),
+        )
+        l2_deleted = cur.rowcount
+        
+        # Delete L1 summaries for this doc
+        cur.execute(
+            f"""
+            DELETE FROM {config.table_summaries} 
+            WHERE level = 1 
+              AND (metadata->>'doc_pk')::BIGINT = %s
+            """,
+            (doc_pk,),
+        )
+        l1_deleted = cur.rowcount
+        
+        if l1_deleted > 0 or l2_deleted > 0:
+            logger.info(f"Cleared {l1_deleted} L1 and {l2_deleted} L2 summaries for doc_pk={doc_pk}")
+
+
 # ── Pipeline runs ─────────────────────────────────────────────────────────────
 
 def start_pipeline_run(run_type: str) -> int:
