@@ -60,7 +60,7 @@ def load_checkpoint():
         return None
 
 def show_checkpoint_status():
-    """Show current checkpoint status"""
+    """Show current checkpoint status and summarization progress"""
     checkpoint = load_checkpoint()
     if checkpoint:
         logger.info("📊 Checkpoint Status:")
@@ -69,6 +69,68 @@ def show_checkpoint_status():
         logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(checkpoint['timestamp']))}")
     else:
         logger.info("📊 No checkpoint found - will start fresh")
+    
+    # Show DB summary stats
+    try:
+        show_summary_stats()
+    except Exception as e:
+        logger.warning(f"Could not fetch summary stats: {e}")
+
+def show_summary_stats():
+    """Show detailed summary statistics from database"""
+    doc_pks = db.fetch_all_doc_ids()
+    total_docs = len(doc_pks)
+    
+    fully_summarized = 0
+    l2_only = 0
+    partial_l1 = 0
+    not_started = 0
+    
+    for doc_pk in doc_pks:
+        doc = db.fetch_doc_metadata(doc_pk)
+        if not doc:
+            continue
+        doc_id = doc.get("doc_id", "")
+        
+        # Check L2
+        has_l2 = db.already_summarized(level=2, source_id=doc_pk)
+        
+        # Check L1 count
+        with db.get_cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) as cnt FROM {config.table_parent_chunks} WHERE doc_id = %s",
+                (doc_id,),
+            )
+            parent_count = cur.fetchone()["cnt"]
+            
+            cur.execute(
+                f"""
+                SELECT COUNT(*) as cnt 
+                FROM {config.table_summaries} 
+                WHERE level = 1 
+                  AND (metadata->>'doc_pk')::BIGINT = %s
+                  AND status = 'done'
+                """,
+                (doc_pk,),
+            )
+            l1_count = cur.fetchone()["cnt"]
+        
+        if has_l2 and l1_count >= parent_count and parent_count > 0:
+            fully_summarized += 1
+        elif has_l2:
+            l2_only += 1
+        elif l1_count > 0:
+            partial_l1 += 1
+        else:
+            not_started += 1
+    
+    logger.info("📈 Summarization Progress:")
+    logger.info(f"   Total documents: {total_docs}")
+    logger.info(f"   ✅ Fully summarized (L1+L2): {fully_summarized}")
+    logger.info(f"   ⚠️  L2 only (missing L1): {l2_only}")
+    logger.info(f"   📝 Partial L1 only: {partial_l1}")
+    logger.info(f"   ⏳ Not started: {not_started}")
+    logger.info(f"   📊 Completion: {fully_summarized}/{total_docs} ({100*fully_summarized//total_docs if total_docs > 0 else 0}%)")
 
 def clear_checkpoint():
     """Clear checkpoint file"""
@@ -170,6 +232,11 @@ def run_level1_for_doc(doc_pk: int) -> list[int]:
 
 # ── Level 2: Document Summarization ──────────────────────────────────────────
 def run_level2_for_doc(doc_pk: int) -> Optional[int]:
+    # Check if already summarized at Level 2
+    if config.skip_done and db.already_summarized(level=2, source_id=doc_pk):
+        logger.info(f"  [L2] doc_pk={doc_pk} already summarized, skipping")
+        return None
+
     l1_summaries = db.fetch_level1_summaries_for_doc(doc_pk)
     if not l1_summaries: return None
 
@@ -390,11 +457,26 @@ def run_backfill(start_doc: int = None, end_doc: int = None, resume: bool = Fals
         doc_pks = [pk for pk in doc_pks if pk >= resume_from]
         logger.info(f"🔄 Resuming from document {resume_from}")
 
+    # Pre-filter: Check which documents are already fully summarized
+    docs_to_process = []
+    skipped_count = 0
+    for doc_pk in doc_pks:
+        doc = db.fetch_doc_metadata(doc_pk)
+        if not doc:
+            continue
+        doc_id = doc.get("doc_id")
+        if config.skip_done and db.is_doc_fully_summarized(doc_pk, doc_id):
+            skipped_count += 1
+            continue
+        docs_to_process.append(doc_pk)
+    
+    logger.info(f"📊 Total documents: {len(doc_pks)}, Already summarized: {skipped_count}, To process: {len(docs_to_process)}")
+
     total_summaries = 0
     docs_done = 0
     last_successful_doc = None
 
-    for doc_pk in doc_pks:
+    for doc_pk in docs_to_process:
         try:
             logger.info(f"── Processing doc_pk {doc_pk} ──")
             l1 = run_level1_for_doc(doc_pk)
@@ -478,7 +560,7 @@ def run_cleanup_chinese():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Arabic RAG Summarization Pipeline")
-    parser.add_argument("--mode", choices=["backfill", "incremental", "recluster", "cleanup-chinese", "status"], required=True)
+    parser.add_argument("--mode", choices=["backfill", "incremental", "recluster", "cleanup-chinese", "status", "stats"], required=True)
     parser.add_argument("--doc-id", type=int, help="Document ID for incremental mode")
     parser.add_argument("--start-doc", type=int, help="Start document ID for backfill range")
     parser.add_argument("--end-doc", type=int, help="End document ID for backfill range")
@@ -500,5 +582,7 @@ if __name__ == "__main__":
         run_cleanup_chinese()
     elif args.mode == "status":
         show_checkpoint_status()
+    elif args.mode == "stats":
+        show_summary_stats()
 
     logger.info(f"Total time: {time.time() - t0:.1f}s")

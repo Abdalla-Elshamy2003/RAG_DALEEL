@@ -103,6 +103,45 @@ def already_summarized(level: int, source_id: Optional[int]) -> bool:
         return cur.fetchone() is not None
 
 
+def is_doc_fully_summarized(doc_pk: int, doc_id: str) -> bool:
+    """
+    Check if document has been fully summarized (both L1 and L2).
+    L1: Check if ALL parent chunks have summaries
+    L2: Check if document has a summary
+    """
+    with get_cursor() as cur:
+        # Check L2 first (faster - single row check)
+        cur.execute(
+            f"SELECT 1 FROM {config.table_summaries} WHERE level = 2 AND source_id = %s AND status = 'done' LIMIT 1",
+            (doc_pk,),
+        )
+        if cur.fetchone() is None:
+            return False
+        
+        # Check L1 - count parent chunks vs summaries
+        # Get count of parent chunks for this doc
+        cur.execute(
+            f"SELECT COUNT(*) as cnt FROM {config.table_parent_chunks} WHERE doc_id = %s",
+            (doc_id,),
+        )
+        parent_count = cur.fetchone()["cnt"]
+        
+        # Get count of L1 summaries for this doc
+        cur.execute(
+            f"""
+            SELECT COUNT(*) as cnt 
+            FROM {config.table_summaries} 
+            WHERE level = 1 
+              AND (metadata->>'doc_pk')::BIGINT = %s
+              AND status = 'done'
+            """,
+            (doc_pk,),
+        )
+        summary_count = cur.fetchone()["cnt"]
+        
+        return summary_count >= parent_count and parent_count > 0
+
+
 def upsert_summary(
     level: int,
     source_id: Optional[int],
