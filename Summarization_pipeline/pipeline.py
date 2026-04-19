@@ -560,7 +560,7 @@ def run_clear_partial_summaries():
     """Clear all partial (incomplete) summaries so they can be reprocessed from scratch."""
     logger.info("=== CLEAR PARTIAL SUMMARIES START ===")
     
-    run_id = db.start_pipeline_run("clear_partial")
+    run_id = db.start_pipeline_run("cleanup-chinese")
     doc_pks = db.fetch_all_doc_ids()
     
     cleared_count = 0
