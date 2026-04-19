@@ -491,6 +491,16 @@ def run_backfill(start_doc: int = None, end_doc: int = None, resume: bool = Fals
                 
         except Exception as exc:
             logger.error(f"Error on doc_pk {doc_pk}: {exc}")
+            
+            # If connection closed, try to reinitialize pool
+            if "connection already closed" in str(exc).lower() or "closed" in str(exc).lower():
+                logger.warning("Connection lost, attempting to reinitialize pool...")
+                try:
+                    db.init_pool()
+                    logger.info("Pool reinitialized successfully")
+                except Exception as pool_err:
+                    logger.error(f"Failed to reinitialize pool: {pool_err}")
+            
             # Save checkpoint on error too
             if last_successful_doc:
                 save_checkpoint(last_successful_doc, start_doc, end_doc)
