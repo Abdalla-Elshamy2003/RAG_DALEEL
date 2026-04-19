@@ -13,19 +13,27 @@ from .tools import WebSearchTool
 
 log = logging.getLogger(__name__)
 
+# Only attempt to fetch full docs when the total document count is small
+# AND the documents are likely to be short enough to fit the context window.
+# For large docs (20-100 pages), the prompter will automatically fall back
+# to reranked chunks — but we avoid the DB round-trip entirely here.
+_FULL_DOC_MAX_UNIQUE_DOCS = 2
+_FULL_DOC_MAX_CHARS_ESTIMATE = 30_000  # rough guard before we even try
+
+
 class RAGEngine:
     """
     Production RAG Engine.
 
     Flow:
     1. Encode query with BAAI/bge-m3
-    2. Hybrid search on child_chunks
+    2. Hybrid search on child_chunks (vector + keyword + RRF)
     3. Retrieve parent_chunks
     4. Rerank with BAAI/bge-reranker-v2-m3
-    5. Use web fallback only if internal evidence is weak/missing
-    6. Fetch FULL parent document texts for all retrieved internal doc_ids
-    7. Generate final answer using local open-source LLM via Ollama,
-       passing full document texts so the LLM has maximum context
+    5. Confidence decision based on reranker logit scores
+    6. Web fallback only if internal confidence is low/none
+    7. Optionally fetch full parent docs (only for small doc sets)
+    8. Generate answer via Ollama (Qwen3), using reranked chunks as primary context
     """
 
     def __init__(self, config: Optional[RAGConfig] = None):
@@ -50,8 +58,8 @@ class RAGEngine:
         source_type: Optional[str] = None,
     ) -> tuple[List[RetrievedContext], ConfidenceDecision, bool, Dict[str, Any]]:
         """
-        Retrieve and rerank evidence without generating the final LLM answer.
-        Useful for debugging retrieval quality.
+        Retrieve and rerank evidence. Does not call the LLM.
+        Useful for debugging retrieval quality and running offline evals.
         """
         query = (query or "").strip()
 
@@ -66,7 +74,7 @@ class RAGEngine:
         # 1. Query embedding
         query_vector = self.models.encode_query(query)
 
-        # 2. Hybrid search on child_chunks, then parent expansion
+        # 2. Hybrid search: vector + keyword → RRF fusion → parent expansion
         internal_contexts = self.db.hybrid_search(
             query_vector=query_vector,
             query_text=query,
@@ -75,57 +83,60 @@ class RAGEngine:
             source_type=source_type,
         )
 
-        # 3. Rerank internal contexts
+        # 3. Rerank internal contexts with cross-encoder
         internal_reranked = self.models.rerank(
             query=query,
             contexts=internal_contexts,
             top_k=self.config.rerank_top_k,
         )
 
-        # 4. Confidence decision
+        # 4. Confidence decision based on reranker logit scores
         decision = evaluate_internal_results(
             contexts=internal_reranked,
             config=self.config,
         )
 
-        should_try_web = self.config.web_fallback_enabled and decision.should_use_web
-
+        # Resolve web usage: explicit override > confidence decision
         if use_web is True:
             should_try_web = True
-
-        if use_web is False:
+        elif use_web is False:
             should_try_web = False
+        else:
+            should_try_web = self.config.web_fallback_enabled and decision.should_use_web
 
         used_web = False
         final_contexts = internal_reranked
 
-        # 5. Web fallback if enabled and necessary
+        # 5. Web fallback
         if should_try_web:
-            log.info("Trying web fallback. Reason: %s", decision.reason)
-
+            log.info("Web fallback triggered. Reason: %s", decision.reason)
             web_contexts = self.web.search(query)
 
             if web_contexts:
                 used_web = True
-                combined_contexts = internal_reranked + web_contexts
-
+                combined = internal_reranked + web_contexts
                 final_contexts = self.models.rerank(
                     query=query,
-                    contexts=combined_contexts,
+                    contexts=combined,
                     top_k=self.config.rerank_top_k,
                 )
 
-        # Only return the combined, reranked contexts (internal + web)
-        final_contexts = [ctx for ctx in final_contexts if ctx.text]  # Focus on parent content
+        # Drop any context with no text (shouldn't happen, but guard it)
+        final_contexts = [ctx for ctx in final_contexts if ctx.text and ctx.text.strip()]
 
-        debug_info = {
+        debug_info: Dict[str, Any] = {
             "internal_retrieved_count": len(internal_contexts),
             "internal_reranked_count": len(internal_reranked),
             "final_context_count": len(final_contexts),
-            "confidence_reason": decision.reason,
             "confidence": decision.confidence,
+            "confidence_reason": decision.reason,
             "web_fallback_enabled": self.config.web_fallback_enabled,
             "used_web": used_web,
+            "top_rerank_score": (
+                internal_reranked[0].rerank_score
+                if internal_reranked and internal_reranked[0].rerank_score is not None
+                else None
+            ),
             "embedding_model": self.config.embedding_model,
             "embedding_version": self.config.embedding_version,
             "reranker_model": self.config.reranker_model,
@@ -134,6 +145,41 @@ class RAGEngine:
         }
 
         return final_contexts, decision, used_web, debug_info
+
+    def _should_fetch_full_docs(
+        self,
+        internal_contexts: List[RetrievedContext],
+    ) -> bool:
+        """
+        Decide whether to fetch full parent documents.
+
+        Only worthwhile when the number of unique docs is small AND
+        the documents are likely short enough to fit the context window.
+        For 20-100 page documents this will almost always return False,
+        meaning the synthesizer uses reranked chunks directly (better quality).
+        """
+        unique_docs = {ctx.doc_id for ctx in internal_contexts if ctx.doc_id}
+
+        if len(unique_docs) > _FULL_DOC_MAX_UNIQUE_DOCS:
+            log.debug(
+                "Skipping full doc fetch: %d unique docs exceeds limit of %d.",
+                len(unique_docs),
+                _FULL_DOC_MAX_UNIQUE_DOCS,
+            )
+            return False
+
+        # Estimate total size from what we already have (parent text is a sample)
+        estimated_chars = sum(len(ctx.text or "") for ctx in internal_contexts)
+        scale_factor = 20  # rough multiplier: parent chunk is ~1/20 of full doc
+
+        if estimated_chars * scale_factor > _FULL_DOC_MAX_CHARS_ESTIMATE:
+            log.debug(
+                "Skipping full doc fetch: estimated doc size ~%d chars exceeds budget.",
+                estimated_chars * scale_factor,
+            )
+            return False
+
+        return True
 
     def answer_question(
         self,
@@ -145,7 +191,7 @@ class RAGEngine:
         source_type: Optional[str] = None,
         answer_style: Optional[str] = None,
         debug: bool = False,
-        stream: bool = False,  # ← ADD THIS
+        stream: bool = False,
     ) -> Dict[str, Any]:
         query = (query or "").strip()
 
@@ -158,7 +204,7 @@ class RAGEngine:
                 "debug": {"reason": "empty_query"} if debug else None,
             }
 
-        log.info("RAG query started.")
+        log.info("RAG query: %s", query[:120])
 
         final_contexts, decision, used_web, debug_info = self.retrieve_contexts(
             query=query,
@@ -168,34 +214,43 @@ class RAGEngine:
             source_type=source_type,
         )
 
-        internal_contexts = [c for c in final_contexts if c.source_type == "internal"]
-        web_contexts = [c for c in final_contexts if c.source_type != "internal"]
+        if not final_contexts:
+            return {
+                "answer": "I could not find relevant information to answer this question.",
+                "sources": [],
+                "used_web": used_web,
+                "confidence": decision.confidence,
+                "debug": debug_info if debug else None,
+            }
 
-        full_docs: List[FullDocContext] = []
-        if internal_contexts:
+        # Only fetch full docs for small/short documents.
+        # Large docs (20-100 pages) use reranked chunks directly — better quality,
+        # faster, and avoids context window overflow.
+        internal_contexts = [c for c in final_contexts if c.source_type == "internal"]
+        full_docs: Optional[List[FullDocContext]] = None
+
+        if internal_contexts and self._should_fetch_full_docs(internal_contexts):
             full_docs = self.db.fetch_full_parent_docs(internal_contexts)
             debug_info["full_docs_fetched"] = len(full_docs)
             debug_info["full_doc_ids"] = [d.doc_id for d in full_docs]
+            log.info("Full docs fetched: %d", len(full_docs))
+        else:
+            debug_info["full_docs_fetched"] = 0
+            debug_info["context_mode"] = "reranked_chunks"
 
-        # Return a dict with a streaming generator instead of a plain string
         answer = self.synthesizer.generate_response(
             query=query,
             contexts=final_contexts,
             used_web=used_web,
-            full_docs=full_docs or None,
+            full_docs=full_docs,
             answer_style=answer_style,
-            stream=stream,  # ← PASS IT THROUGH
+            stream=stream,
         )
 
-        result: Dict[str, Any] = {
-            "answer": answer,  # str if stream=False, Iterator if stream=True
-            "sources": [context.to_public_dict() for context in final_contexts],
+        return {
+            "answer": answer,
+            "sources": [ctx.to_public_dict() for ctx in final_contexts],
             "used_web": used_web,
             "confidence": decision.confidence,
+            "debug": debug_info if debug else None,
         }
-
-        if debug:
-            result["debug"] = debug_info
-
-        log.info("RAG query finished.")
-        return result

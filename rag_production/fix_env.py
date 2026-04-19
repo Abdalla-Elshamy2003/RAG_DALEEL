@@ -21,7 +21,7 @@ WEB_FALLBACK_ENABLED=true
 
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen3:8b
+OLLAMA_MODEL=qwen2.5:7b 
 
 ANSWER_LANGUAGE=same_as_question
 ANSWER_STYLE=professional, clear, grounded, and concise
