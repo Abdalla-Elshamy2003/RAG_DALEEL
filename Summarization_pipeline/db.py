@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import contextmanager
 from typing import Optional
 
-from psycopg2 import pool
+from psycopg2 import pool, OperationalError
 from psycopg2.extras import RealDictCursor, Json
 
 from config import config
@@ -14,12 +15,21 @@ logger = logging.getLogger(__name__)
 _pool: Optional[pool.ThreadedConnectionPool] = None
 
 
-def init_pool(min_conn: int = 2, max_conn: int = 8) -> None:
+def init_pool(min_conn: int = 2, max_conn: int = 8, reset: bool = False) -> None:
     global _pool
-    # إخفاء كلمة المرور في السجلات لأغراض أمنية
-    safe_dsn = config.db_conn.split("password=")[0].strip()
-    _pool = pool.ThreadedConnectionPool(min_conn, max_conn, config.db_conn)
-    logger.info("DB pool ready — %s", safe_dsn)
+    if reset and _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
+        _pool = None
+        logger.info("Pool reset - creating new connections")
+    
+    if _pool is None:
+        # إخفاء كلمة المرور في السجلات لأغراض أمنية
+        safe_dsn = config.db_conn.split("password=")[0].strip()
+        _pool = pool.ThreadedConnectionPool(min_conn, max_conn, config.db_conn)
+        logger.info("DB pool ready — %s", safe_dsn)
 
 
 def _get_pool() -> pool.ThreadedConnectionPool:
@@ -29,17 +39,53 @@ def _get_pool() -> pool.ThreadedConnectionPool:
 
 
 @contextmanager
-def get_conn():
-    p = _get_pool()
-    conn = p.getconn()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        p.putconn(conn)
+def get_conn(max_retries: int = 3, retry_delay: float = 2.0):
+    """Get connection with automatic retry on failure"""
+    global _pool
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            p = _get_pool()
+            conn = p.getconn()
+            try:
+                # Test connection is alive
+                with conn.cursor() as test_cur:
+                    test_cur.execute("SELECT 1")
+                yield conn
+                conn.commit()
+                return
+            except OperationalError as e:
+                # Connection dead, don't put back to pool
+                logger.warning(f"Connection dead (attempt {attempt+1}), will retry: {e}")
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                try:
+                    p.putconn(conn)
+                except Exception:
+                    pass  # Connection already closed
+        except OperationalError as e:
+            last_error = e
+            logger.warning(f"DB connection failed (attempt {attempt+1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                # Reset pool and wait before retry
+                try:
+                    if _pool:
+                        _pool.closeall()
+                except Exception:
+                    pass
+                _pool = None
+                time.sleep(retry_delay * (attempt + 1))  # Increasing delay
+                init_pool()
+            continue
+        except Exception as e:
+            raise
+    
+    # All retries exhausted
+    raise last_error or RuntimeError("Failed to get database connection")
 
 
 @contextmanager

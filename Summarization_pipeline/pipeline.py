@@ -485,33 +485,58 @@ def run_backfill(start_doc: int = None, end_doc: int = None, resume: bool = Fals
             docs_done += 1
             last_successful_doc = doc_pk
             
-            # Save checkpoint every 5 documents
-            if docs_done % 5 == 0:
-                save_checkpoint(last_successful_doc, start_doc, end_doc)
+            # Save checkpoint after every document (not just every 5)
+            save_checkpoint(last_successful_doc, start_doc, end_doc)
+            logger.info(f"✅ Checkpoint saved: doc_pk={doc_pk} | Completed {docs_done}/{len(docs_to_process)}")
                 
         except Exception as exc:
-            logger.error(f"Error on doc_pk {doc_pk}: {exc}")
+            error_msg = str(exc)
+            logger.error(f"❌ Error on doc_pk {doc_pk}: {exc}")
             
-            # If connection closed, try to reinitialize pool
-            if "connection already closed" in str(exc).lower() or "closed" in str(exc).lower():
-                logger.warning("Connection lost, attempting to reinitialize pool...")
+            # Check if this is a connection error
+            is_connection_error = (
+                "connection already closed" in error_msg.lower() or 
+                "closed" in error_msg.lower() or
+                "no route to host" in error_msg.lower() or
+                "connection timed out" in error_msg.lower() or
+                "connection refused" in error_msg.lower()
+            )
+            
+            if is_connection_error:
+                logger.warning("🔌 Connection lost, will retry with fresh connection...")
                 try:
-                    db.init_pool()
-                    logger.info("Pool reinitialized successfully")
+                    db.init_pool(reset=True)
+                    logger.info("✅ Pool reinitialized successfully")
+                    # Don't mark as successful, will be retried on resume
                 except Exception as pool_err:
-                    logger.error(f"Failed to reinitialize pool: {pool_err}")
+                    logger.error(f"❌ Failed to reinitialize pool: {pool_err}")
             
-            # Save checkpoint on error too
+            # Save checkpoint with last successful document
             if last_successful_doc:
                 save_checkpoint(last_successful_doc, start_doc, end_doc)
+                logger.info(f"💾 Saved checkpoint at last successful: doc_pk={last_successful_doc}")
+            
+            # Don't count this doc as done - it will be retried
             continue
 
-    clusters = run_level3_clustering()
-    db.finish_pipeline_run(run_id, docs=docs_done, summaries=total_summaries + clusters)
+    # Only run L3 clustering if we have successful documents
+    if docs_done > 0:
+        try:
+            clusters = run_level3_clustering()
+            db.finish_pipeline_run(run_id, docs=docs_done, summaries=total_summaries + clusters)
+        except Exception as exc:
+            logger.error(f"❌ L3 clustering failed: {exc}")
+            db.finish_pipeline_run(run_id, docs=docs_done, summaries=total_summaries, error=str(exc))
+    else:
+        logger.warning("⚠️ No documents successfully processed, skipping L3 clustering")
+        db.finish_pipeline_run(run_id, docs=0, summaries=0, error="No successful documents")
     
-    # Clear checkpoint on successful completion
-    clear_checkpoint()
-    logger.info("✅ Backfill completed successfully!")
+    # Only clear checkpoint if all documents in range were processed
+    if docs_done >= len(docs_to_process):
+        clear_checkpoint()
+        logger.info("✅ All documents processed - checkpoint cleared")
+    else:
+        logger.info(f"⏸️ Checkpoint preserved: {docs_done}/{len(docs_to_process)} documents completed. Run with --resume to continue.")
 
 def run_incremental(doc_id: int):
     run_id = db.start_pipeline_run("incremental")
