@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+
+  # ── Streamlit UI ────────────────────────────────────────────────────────────
+  streamlit:
+    build: .
+    container_name: docs_streamlit
+    command: streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data          # shared folder with watcher
+    environment:
+      - DB_CONN=${DB_CONN}
+    restart: unless-stopped
+
+  # ── Watcher / Auto-ingest service ───────────────────────────────────────────
+  watcher:
+    build: .
+    container_name: docs_watcher
+    command: python watcher_service.py --folder /app/data --interval 30
+    volumes:
+      - ./data:/app/data          # same shared folder
+    environment:
+      - DB_CONN=${DB_CONN}
+      - WATCH_FOLDER=/app/data
+      - POLL_INTERVAL=30
+    restart: unless-stopped
+    depends_on:
+      - streamlit
+
+  # ── Embedding Watcher / Auto-embedding service ─────────────────────────────
+  embedding_watcher:
+    build: .
+    container_name: docs_embedding_watcher
+    command: python -m embedding --watch --interval 30
+    environment:
+      - DB_CONN=${DB_CONN}
+    restart: unless-stopped
+    depends_on:
+      - streamlit
