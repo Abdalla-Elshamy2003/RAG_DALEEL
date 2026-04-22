@@ -1,201 +1,162 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
+import logging
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
-from dotenv import load_dotenv
+from .confidence import evaluate_internal_results, filter_irrelevant_results
+from .config import RAGConfig
+from .database import ProductionDatabase
+from .model import GPUModelManager
+from .prompter import Synthesizer
+from .schemas import ConfidenceDecision, FullDocContext, RetrievedContext
+from .tools import WebSearchTool
 
+log = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ENV_PATH = _PROJECT_ROOT / ".env"
+class RAGEngine:
+    def __init__(self, config: Optional[RAGConfig] = None):
+        self.config = config or RAGConfig()
+        self.config.validate()
 
-load_dotenv(_ENV_PATH, override=True)
+        self.db = ProductionDatabase(self.config)
+        self.models = GPUModelManager(self.config)
+        
+        # PRODUCTION CHECK: Ensure we aren't accidentally on CPU
+        if self.models.device != "cuda":
+            log.error("CRITICAL: GPUModelManager initialized on CPU. Reranking will be extremely slow.")
+            # In a strict production env, you might want to raise an error here
+        
+        self.web = WebSearchTool(self.config)
+        self.synthesizer = Synthesizer(self.config)
 
+    def close(self) -> None:
+        self.db.close()
 
-def _reload_env() -> None:
-    load_dotenv(_ENV_PATH, override=True)
+    def retrieve_contexts(
+        self,
+        query: str,
+        *,
+        use_web: Optional[bool] = None,
+        language: Optional[str] = None,
+        doc_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+    ) -> Tuple[List[RetrievedContext], ConfidenceDecision, bool, Dict[str, Any]]:
+        
+        total_start = time.perf_counter()
+        timings = {}
 
+        query = (query or "").strip()
+        if not query:
+            return [], ConfidenceDecision(should_use_web=True, reason="Empty query", confidence="none"), False, {"error": "empty"}
 
-def _get_str(name: str, default: str) -> str:
-    _reload_env()
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return value
+        # 1. Query embedding (GPU)
+        embed_start = time.perf_counter()
+        query_vector = self.models.encode_query(query)
+        timings["embedding_time"] = time.perf_counter() - embed_start
 
-
-def _get_int(name: str, default: int) -> int:
-    _reload_env()
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return int(value)
-
-
-def _get_float(name: str, default: float) -> float:
-    _reload_env()
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return float(value)
-
-
-def _get_float_or_none(name: str) -> Optional[float]:
-    _reload_env()
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return None
-    return float(value)
-
-
-def _get_bool(name: str, default: bool) -> bool:
-    _reload_env()
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-@dataclass(frozen=True)
-class RAGConfig:
-    # Database
-    db_conn: str = field(default_factory=lambda: _get_str("DB_CONN", ""))
-
-    # Embedding model
-    embedding_model: str = field(
-        default_factory=lambda: _get_str("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
-    )
-    embedding_version: int = field(
-        default_factory=lambda: _get_int("EMBEDDING_VERSION", 1)
-    )
-
-    # Reranker model
-    reranker_model: str = field(
-        default_factory=lambda: _get_str(
-            "RERANKER_MODEL_NAME",
-            "BAAI/bge-reranker-v2-m3",
+        # 2. Hybrid search (Postgres) - Now returns (results, db_timings)
+        internal_contexts, db_timings = self.db.hybrid_search(
+            query_vector=query_vector,
+            query_text=query,
+            language=language,
+            doc_id=doc_id,
+            source_type=source_type,
         )
-    )
-    reranker_max_chars: int = field(
-        default_factory=lambda: _get_int("RERANKER_MAX_CHARS", 2500)
-    )
-    rerank_top_k: int = field(default_factory=lambda: _get_int("RERANK_TOP_K", 3))
-    cpu_skip_reranker: bool = field(
-        default_factory=lambda: _get_bool("CPU_SKIP_RERANKER", True)
-    )
+        timings.update(db_timings)
 
-    # Hybrid retrieval
-    vector_candidates: int = field(
-        default_factory=lambda: _get_int("VECTOR_CANDIDATES", 24)
-    )
-    keyword_candidates: int = field(
-        default_factory=lambda: _get_int("KEYWORD_CANDIDATES", 24)
-    )
-    fused_child_limit: int = field(
-        default_factory=lambda: _get_int("FUSED_CHILD_LIMIT", 12)
-    )
-    parent_limit: int = field(default_factory=lambda: _get_int("PARENT_LIMIT", 6))
-    rrf_k: int = field(default_factory=lambda: _get_int("RRF_K", 60))
-
-    # pgvector HNSW
-    hnsw_ef_search: int = field(
-        default_factory=lambda: _get_int("HNSW_EF_SEARCH", 100)
-    )
-
-    # Web fallback
-    web_fallback_enabled: bool = field(
-        default_factory=lambda: _get_bool("WEB_FALLBACK_ENABLED", False)
-    )
-    tavily_api_key: str = field(default_factory=lambda: _get_str("TAVILY_API_KEY", ""))
-    tavily_max_results: int = field(
-        default_factory=lambda: _get_int("TAVILY_MAX_RESULTS", 3)
-    )
-    tavily_search_depth: str = field(
-        default_factory=lambda: _get_str("TAVILY_SEARCH_DEPTH", "basic")
-    )
-    web_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("WEB_TIMEOUT_SECONDS", 5.0)
-    )
-
-    # Confidence threshold
-    # Keep None until you evaluate reranker scores.
-    internal_min_rerank_score: Optional[float] = field(
-        default_factory=lambda: _get_float_or_none("INTERNAL_MIN_RERANK_SCORE")
-    )
-
-    # Open-source local LLM using Ollama
-    llm_provider: str = field(
-        default_factory=lambda: _get_str("LLM_PROVIDER", "ollama").lower()
-    )
-    ollama_base_url: str = field(
-        default_factory=lambda: _get_str("OLLAMA_BASE_URL", "http://localhost:11434")
-    )
-    ollama_model: str = field(
-        default_factory=lambda: _get_str("OLLAMA_MODEL", "qwen2.5:3b")
-    )
-    ollama_connect_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("OLLAMA_CONNECT_TIMEOUT_SECONDS", 10.0)
-    )
-    ollama_request_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("OLLAMA_REQUEST_TIMEOUT_SECONDS", 600.0)
-    )
-    ollama_stream_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("OLLAMA_STREAM_TIMEOUT_SECONDS", 600.0)
-    )
-    ollama_num_ctx: int = field(default_factory=lambda: _get_int("OLLAMA_NUM_CTX", 4096))
-    ollama_num_predict: int = field(
-        default_factory=lambda: _get_int("OLLAMA_NUM_PREDICT", 128)
-    )
-    ollama_keep_alive: str = field(
-        default_factory=lambda: _get_str("OLLAMA_KEEP_ALIVE", "30m")
-    )
-    prompt_context_limit: int = field(
-        default_factory=lambda: _get_int("PROMPT_CONTEXT_LIMIT", 2)
-    )
-    allow_general_knowledge_fallback: bool = field(
-        default_factory=lambda: _get_bool("ALLOW_GENERAL_KNOWLEDGE_FALLBACK", True)
-    )
-
-    # Answer behavior
-    answer_language: str = field(
-        default_factory=lambda: _get_str("ANSWER_LANGUAGE", "same_as_question")
-    )
-    default_answer_style: str = field(
-        default_factory=lambda: _get_str(
-            "ANSWER_STYLE",
-            "detailed, structured, grounded, and explicit about evidence",
+        # 3. Rerank internal contexts (GPU)
+        rerank_start = time.perf_counter()
+        # We send up to FUSED_CHILD_LIMIT to the reranker
+        internal_reranked = self.models.rerank(
+            query=query,
+            contexts=internal_contexts,
+            top_k=self.config.rerank_top_k,
         )
-    )
+        timings["rerank_time"] = time.perf_counter() - rerank_start
 
-    def validate(self) -> None:
-        if not self.db_conn:
-            raise ValueError("DB_CONN is missing. Check your .env file.")
+        # 4. Accuracy Enhancement: Filter Noise (The "Spain/Sports" fix)
+        # This removes results that are mathematically far from the top result
+        internal_reranked = filter_irrelevant_results(
+            internal_reranked, 
+            threshold_ratio=0.6 # Only keep results > 60% of top score
+        )
 
-        if self.llm_provider != "ollama":
-            raise ValueError(
-                "This production setup is configured for open-source local models. "
-                "Use LLM_PROVIDER=ollama in .env."
-            )
+        # 5. Confidence decision
+        decision = evaluate_internal_results(
+            contexts=internal_reranked,
+            config=self.config,
+        )
 
-        if self.ollama_connect_timeout_seconds <= 0:
-            raise ValueError("OLLAMA_CONNECT_TIMEOUT_SECONDS must be greater than 0.")
+        # Web logic
+        should_try_web = use_web if use_web is not None else (self.config.web_fallback_enabled and decision.should_use_web)
+        used_web = False
+        final_contexts = internal_reranked
 
-        if self.ollama_request_timeout_seconds <= 0:
-            raise ValueError("OLLAMA_REQUEST_TIMEOUT_SECONDS must be greater than 0.")
+        if should_try_web:
+            log.info("Web fallback triggered: %s", decision.reason)
+            web_contexts = self.web.search(query)
+            if web_contexts:
+                used_web = True
+                # Rerank the combination of web + internal
+                combined = internal_reranked + web_contexts
+                final_contexts = self.models.rerank(
+                    query=query,
+                    contexts=combined,
+                    top_k=self.config.rerank_top_k,
+                )
 
-        if self.ollama_stream_timeout_seconds <= 0:
-            raise ValueError("OLLAMA_STREAM_TIMEOUT_SECONDS must be greater than 0.")
+        timings["total_retrieval_time"] = time.perf_counter() - total_start
+        
+        debug_info = {
+            "timings": timings,
+            "confidence": decision.confidence,
+            "used_web": used_web,
+            "count": len(final_contexts)
+        }
 
-        if self.ollama_num_ctx <= 0:
-            raise ValueError("OLLAMA_NUM_CTX must be greater than 0.")
+        return final_contexts, decision, used_web, debug_info
 
-        if self.web_timeout_seconds <= 0:
-            raise ValueError("WEB_TIMEOUT_SECONDS must be greater than 0.")
+    def answer_question(
+        self,
+        query: str,
+        **kwargs
+    ) -> Dict[str, Any]:
+        
+        # Get contexts with full timing data
+        final_contexts, decision, used_web, debug_info = self.retrieve_contexts(query, **kwargs)
 
-        if self.ollama_num_predict <= 0:
-            raise ValueError("OLLAMA_NUM_PREDICT must be greater than 0.")
+        if not final_contexts:
+            return {
+                "answer": "I don't have sufficient information in the available sources to answer this question.",
+                "sources": [],
+                "used_web": used_web,
+                "debug": debug_info
+            }
 
-        if self.prompt_context_limit <= 0:
-            raise ValueError("PROMPT_CONTEXT_LIMIT must be greater than 0.")
+        # LLM Generation
+        gen_start = time.perf_counter()
+        
+        # Decide if we need full docs (only for very specific/small docs)
+        full_docs = None
+        if not used_web and len(final_contexts) <= 2:
+            full_docs, _ = self.db.fetch_full_parent_docs(final_contexts)
+
+        answer = self.synthesizer.generate_response(
+            query=query,
+            contexts=final_contexts,
+            used_web=used_web,
+            full_docs=full_docs,
+        )
+        
+        debug_info["timings"]["llm_generation_time"] = time.perf_counter() - gen_start
+        debug_info["timings"]["end_to_end_time"] = sum(debug_info["timings"].values())
+
+        return {
+            "answer": answer,
+            "sources": [ctx.to_public_dict() for ctx in final_contexts],
+            "used_web": used_web,
+            "confidence": decision.confidence,
+            "debug": debug_info,
+        }
+    

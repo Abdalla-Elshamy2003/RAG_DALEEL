@@ -106,3 +106,20 @@ def evaluate_internal_results(
         ),
         confidence="high",
     )
+
+
+
+def filter_irrelevant_results(contexts: List[RetrievedContext], threshold_ratio: float = 0.6):
+    if not contexts: return []
+    
+    top_score = contexts[0].rerank_score
+    # If the top score is already low, the whole batch might be noise
+    if top_score < 0: # BGE Reranker uses 0 as the neutral point
+        return []
+
+    # Only keep results that are at least 60% as good as the top result
+    filtered = [
+        ctx for ctx in contexts 
+        if ctx.rerank_score > (top_score * threshold_ratio)
+    ]
+    return filtered
