@@ -106,7 +106,7 @@ class RAGConfig:
 
     # Web fallback
     web_fallback_enabled: bool = field(
-        default_factory=lambda: _get_bool("WEB_FALLBACK_ENABLED", False)
+        default_factory=lambda: _get_bool("WEB_FALLBACK_ENABLED", True)
     )
     tavily_api_key: str = field(default_factory=lambda: _get_str("TAVILY_API_KEY", ""))
     tavily_max_results: int = field(
@@ -165,7 +165,7 @@ class RAGConfig:
     default_answer_style: str = field(
         default_factory=lambda: _get_str(
             "ANSWER_STYLE",
-            "detailed, structured, grounded, and explicit about evidence",
+            "detailed, thorough, structured, richly explained, natural, human-like, grounded, and explicit about evidence",
         )
     )
 

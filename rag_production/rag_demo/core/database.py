@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Dict, List, Optional
+import psycopg
 from psycopg.rows import dict_row
 
 from psycopg_pool import ConnectionPool
@@ -24,6 +25,7 @@ class ProductionDatabase:
             max_size=10,
             open=True,
             configure=self._configure_connection,
+            check=ConnectionPool.check_connection,
         )
 
     def _configure_connection(self, conn) -> None:
@@ -47,6 +49,51 @@ class ProductionDatabase:
 
     def close(self) -> None:
         self.pool.close()
+
+    @staticmethod
+    def _is_retryable_connection_error(exc: BaseException) -> bool:
+        if not isinstance(exc, psycopg.Error):
+            return False
+
+        message = str(exc).lower()
+        retry_markers = (
+            "server closed the connection unexpectedly",
+            "consuming input failed",
+            "connection is closed",
+            "terminating connection",
+            "connection not open",
+        )
+        return any(marker in message for marker in retry_markers)
+
+    def _run_fetchall(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        *,
+        row_factory=None,
+        operation_name: str,
+    ) -> list[Any]:
+        last_exc: BaseException | None = None
+
+        for attempt in range(2):
+            try:
+                with self.pool.connection() as conn:
+                    with conn.cursor(row_factory=row_factory) as cur:
+                        cur.execute(sql, params)
+                        return cur.fetchall()
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0 and self._is_retryable_connection_error(exc):
+                    log.warning(
+                        "Retrying database operation '%s' after connection failure: %s",
+                        operation_name,
+                        exc,
+                    )
+                    continue
+                raise
+
+        assert last_exc is not None
+        raise last_exc
 
     @staticmethod
     def _vector_literal(vector: List[float]) -> str:
@@ -96,19 +143,27 @@ class ProductionDatabase:
         ORDER BY embedding_model, embedding_version;
         """
 
-        with self.pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM parent_chunks;")
-                parent_count = cur.fetchone()[0]
-
-                cur.execute("SELECT COUNT(*) FROM child_chunks;")
-                child_count = cur.fetchone()[0]
-
-                cur.execute(sql_content_tsv)
-                content_tsv_exists = bool(cur.fetchall())
-
-                cur.execute(sql_embedding_versions)
-                embedding_versions = cur.fetchall()
+        rows = self._run_fetchall(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM parent_chunks) AS parent_count,
+                (SELECT COUNT(*) FROM child_chunks) AS child_count,
+                EXISTS(
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'child_chunks'
+                      AND column_name = 'content_tsv'
+                ) AS content_tsv_exists;
+            """,
+            operation_name="health_check_summary",
+        )
+        parent_count = rows[0][0]
+        child_count = rows[0][1]
+        content_tsv_exists = bool(rows[0][2])
+        embedding_versions = self._run_fetchall(
+            sql_embedding_versions,
+            operation_name="health_check_embedding_versions",
+        )
 
         return {
             "db_connected": True,
@@ -297,10 +352,12 @@ class ProductionDatabase:
         LIMIT %(parent_limit)s;
         """
 
-        with self.pool.connection() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql, params)
-                rows = cur.fetchall()
+        rows = self._run_fetchall(
+            sql,
+            params,
+            row_factory=dict_row,
+            operation_name="hybrid_search",
+        )
 
         # Convert to RetrievedContext but only return the parent content to LLM
         return [
@@ -354,14 +411,17 @@ class ProductionDatabase:
 
         rows_by_doc: Dict[str, List[str]] = {doc_id: [] for doc_id in ordered_doc_ids}
 
-        with self.pool.connection() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql, {"doc_ids": ordered_doc_ids})
-                for row in cur.fetchall():
-                    doc_id = str(row["doc_id"])
-                    text = row.get("text") or ""
-                    if doc_id in rows_by_doc and text.strip():
-                        rows_by_doc[doc_id].append(text)
+        rows = self._run_fetchall(
+            sql,
+            {"doc_ids": ordered_doc_ids},
+            row_factory=dict_row,
+            operation_name="fetch_full_parent_docs",
+        )
+        for row in rows:
+            doc_id = str(row["doc_id"])
+            text = row.get("text") or ""
+            if doc_id in rows_by_doc and text.strip():
+                rows_by_doc[doc_id].append(text)
 
         full_docs: List[FullDocContext] = []
         for doc_id in ordered_doc_ids:
